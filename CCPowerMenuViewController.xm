@@ -30,13 +30,28 @@
 // How long a press has to be held before it counts as a long press rather than a tap.
 static const NSTimeInterval kLongPressDuration = 0.5;
 
+// self.expanded is not usable here: the superclass only sets it from its own _handlePressGesture:,
+// which we bypass, so it stays false even with the menu wide open. Ask the container, which
+// tracks the real state — otherwise touches meant for menu items get swallowed by this class and
+// a finger resting on an item for half a second trips the long-press respring.
+- (BOOL)isMenuExpanded {
+    if (self.expanded) {
+        return YES;
+    }
+    UIViewController *container = self.parentViewController;
+    if ([container respondsToSelector:@selector(isExpanded)]) {
+        return [(CCUIContentModuleContainerViewController *)container isExpanded];
+    }
+    return NO;
+}
+
 // Control Center hands the whole touch to this one recognizer (minimumPressDuration is 0, so it
 // begins on touch-down), and stock behaviour is: tap does nothing, long press expands the menu.
 // Take the gesture over completely to swap that around — tap opens the menu, long press resprings
 // straight away. Deliberately does not call super for the collapsed case; super is what would
 // expand on long press, which is exactly what we are replacing.
 - (void)_handlePressGesture:(UILongPressGestureRecognizer *)gesture {
-    if (self.expanded) {
+    if ([self isMenuExpanded]) {
         [super _handlePressGesture:gesture];
         return;
     }
@@ -47,6 +62,11 @@ static const NSTimeInterval kLongPressDuration = 0.5;
             __weak typeof(self) weakSelf = self;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kLongPressDuration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (gesture.state != UIGestureRecognizerStateBegan && gesture.state != UIGestureRecognizerStateChanged) {
+                    return;
+                }
+                // Re-check: if the menu opened under the finger meanwhile, this press belongs to
+                // the menu, not to the respring shortcut.
+                if ([weakSelf isMenuExpanded]) {
                     return;
                 }
                 weakSelf.longPressFired = YES;

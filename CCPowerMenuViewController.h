@@ -55,9 +55,11 @@ typedef struct CCUILayoutSize {
 - (void)_handlePressGesture:(id)arg0;
 @end
 
-// The module's own container — the object that opens the expanded menu.
+// The module's own container — the object that opens the expanded menu, and the one that
+// actually knows whether it is open.
 @interface CCUIContentModuleContainerViewController : UIViewController
 - (void)expandModule;
+- (BOOL)isExpanded;
 @end
 
 @interface CCUIMenuModuleItem : NSObject
@@ -88,6 +90,7 @@ typedef struct CCUILayoutSize {
 - (void)confirmActionWithTitle:(NSString *)title message:(NSString *)message confirmTitle:(NSString *)confirmTitle handler:(void (^)(void))handler;
 - (void)respringWithConfirmation;
 - (void)respringNow;
+- (BOOL)isMenuExpanded;
 @end
 
 @interface FBSystemService : NSObject
