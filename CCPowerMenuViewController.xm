@@ -50,7 +50,9 @@ static const NSTimeInterval kLongPressDuration = 0.5;
                     return;
                 }
                 weakSelf.longPressFired = YES;
-                [weakSelf respringWithConfirmation];
+                // No confirmation and no menu here — holding the icon is the shortcut, so it
+                // resprings on the spot. The menu item still asks first.
+                [weakSelf respringNow];
             });
             break;
         }
@@ -73,14 +75,18 @@ static const NSTimeInterval kLongPressDuration = 0.5;
         [(CCUIContentModuleContainerViewController *)container expandModule];
     }
 }
+- (void)respringNow {
+    // Do NOT kill backboardd here: relaunching the render server needs
+    // com.apple.appletv.pbs.allow-relaunch-backboardd (which is why sbreload carries it).
+    // Killing it from SpringBoard just takes the display server down for good.
+    // exitAndRelaunch: restarts SpringBoard only, which is what a respring is.
+    FBSystemService *systemService = [%c(FBSystemService) sharedInstance];
+    [systemService exitAndRelaunch:YES];
+}
 - (void)respringWithConfirmation {
+    __weak typeof(self) weakSelf = self;
     [self confirmActionWithTitle:@"确定要注销吗?" message:@"SpringBoard 将会重新启动。" confirmTitle:@"注销" handler:^{
-        // Do NOT kill backboardd here: relaunching the render server needs
-        // com.apple.appletv.pbs.allow-relaunch-backboardd (which is why sbreload carries it).
-        // Killing it from SpringBoard just takes the display server down for good.
-        // exitAndRelaunch: restarts SpringBoard only, which is what a respring is.
-        FBSystemService *systemService = [%c(FBSystemService) sharedInstance];
-        [systemService exitAndRelaunch:YES];
+        [weakSelf respringNow];
     }];
 }
 // Every action here is destructive and one stray tap away, so each one goes through a

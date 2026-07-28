@@ -87,6 +87,7 @@ typedef struct CCUILayoutSize {
 @property (nonatomic, assign) BOOL longPressFired;
 - (void)confirmActionWithTitle:(NSString *)title message:(NSString *)message confirmTitle:(NSString *)confirmTitle handler:(void (^)(void))handler;
 - (void)respringWithConfirmation;
+- (void)respringNow;
 @end
 
 @interface FBSystemService : NSObject
