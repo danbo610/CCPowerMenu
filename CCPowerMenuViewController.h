@@ -77,6 +77,8 @@ typedef struct CCUILayoutSize {
 @property (nonatomic, readonly) CGFloat preferredExpandedContentWidth;
 @property (nonatomic, readonly) BOOL expanded;
 @property (nonatomic, strong) UIActivityIndicatorView *spinnerIndicatorView;
+@property (nonatomic, strong) UIWindow *confirmationWindow;
+- (void)confirmActionWithTitle:(NSString *)title message:(NSString *)message confirmTitle:(NSString *)confirmTitle handler:(void (^)(void))handler;
 @end
 
 @interface FBSystemService : NSObject
