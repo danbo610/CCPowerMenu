@@ -27,6 +27,62 @@
         [self addActionForIdentifier:identifier];
     }
 }
+// How long a press has to be held before it counts as a long press rather than a tap.
+static const NSTimeInterval kLongPressDuration = 0.5;
+
+// Control Center hands the whole touch to this one recognizer (minimumPressDuration is 0, so it
+// begins on touch-down), and stock behaviour is: tap does nothing, long press expands the menu.
+// Take the gesture over completely to swap that around — tap opens the menu, long press resprings
+// straight away. Deliberately does not call super for the collapsed case; super is what would
+// expand on long press, which is exactly what we are replacing.
+- (void)_handlePressGesture:(UILongPressGestureRecognizer *)gesture {
+    if (self.expanded) {
+        [super _handlePressGesture:gesture];
+        return;
+    }
+
+    switch (gesture.state) {
+        case UIGestureRecognizerStateBegan: {
+            self.longPressFired = NO;
+            __weak typeof(self) weakSelf = self;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kLongPressDuration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                if (gesture.state != UIGestureRecognizerStateBegan && gesture.state != UIGestureRecognizerStateChanged) {
+                    return;
+                }
+                weakSelf.longPressFired = YES;
+                [weakSelf respringWithConfirmation];
+            });
+            break;
+        }
+        case UIGestureRecognizerStateEnded:
+            if (!self.longPressFired) {
+                [self openMenu];
+            }
+            break;
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed:
+            self.longPressFired = NO;
+            break;
+        default:
+            break;
+    }
+}
+- (void)openMenu {
+    UIViewController *container = self.parentViewController;
+    if ([container respondsToSelector:@selector(expandModule)]) {
+        [(CCUIContentModuleContainerViewController *)container expandModule];
+    }
+}
+- (void)respringWithConfirmation {
+    [self confirmActionWithTitle:@"确定要注销吗?" message:@"SpringBoard 将会重新启动。" confirmTitle:@"注销" handler:^{
+        // Do NOT kill backboardd here: relaunching the render server needs
+        // com.apple.appletv.pbs.allow-relaunch-backboardd (which is why sbreload carries it).
+        // Killing it from SpringBoard just takes the display server down for good.
+        // exitAndRelaunch: restarts SpringBoard only, which is what a respring is.
+        FBSystemService *systemService = [%c(FBSystemService) sharedInstance];
+        [systemService exitAndRelaunch:YES];
+    }];
+}
 // Every action here is destructive and one stray tap away, so each one goes through a
 // confirmation first. Control Center has no view controller we can present on, so the alert gets
 // its own window above the alert level — the same approach CCPower and PowerSelector use.
@@ -77,14 +133,7 @@
     if (!state || [state boolValue] == YES) {
         if ([identifier isEqualToString:@"respring"]) {
             [self addActionWithTitle:@"Respring" subtitle:@"Reloads SpringBoard" glyph:[UIImage systemImageNamed:@"arrow.clockwise.circle"] handler:^(void){
-                [weakSelf confirmActionWithTitle:@"确定要注销吗?" message:@"SpringBoard 将会重新启动。" confirmTitle:@"注销" handler:^{
-                    // Do NOT kill backboardd here: relaunching the render server needs
-                    // com.apple.appletv.pbs.allow-relaunch-backboardd (which is why sbreload carries it).
-                    // Killing it from SpringBoard just takes the display server down for good.
-                    // exitAndRelaunch: restarts SpringBoard only, which is what a respring is.
-                    FBSystemService *systemService = [%c(FBSystemService) sharedInstance];
-                    [systemService exitAndRelaunch:YES];
-                }];
+                [weakSelf respringWithConfirmation];
             }];
         } else if ([identifier isEqualToString:@"safemode"]) {
             [self addActionWithTitle:@"Safe Mode" subtitle:@"Restarts SpringBoard in Safe Mode" glyph:[UIImage systemImageNamed:@"exclamationmark.arrow.triangle.2.circlepath"] handler:^(void){

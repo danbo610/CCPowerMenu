@@ -52,6 +52,12 @@ typedef struct CCUILayoutSize {
 - (void)addActionWithTitle:(id)arg0 subtitle:(id)arg1 glyph:(id)arg2 handler:(id)arg3;
 - (void)setMenuItems:(id)arg0;
 - (void)removeAllActions;
+- (void)_handlePressGesture:(id)arg0;
+@end
+
+// The module's own container — the object that opens the expanded menu.
+@interface CCUIContentModuleContainerViewController : UIViewController
+- (void)expandModule;
 @end
 
 @interface CCUIMenuModuleItem : NSObject
@@ -78,7 +84,9 @@ typedef struct CCUILayoutSize {
 @property (nonatomic, readonly) BOOL expanded;
 @property (nonatomic, strong) UIActivityIndicatorView *spinnerIndicatorView;
 @property (nonatomic, strong) UIWindow *confirmationWindow;
+@property (nonatomic, assign) BOOL longPressFired;
 - (void)confirmActionWithTitle:(NSString *)title message:(NSString *)message confirmTitle:(NSString *)confirmTitle handler:(void (^)(void))handler;
+- (void)respringWithConfirmation;
 @end
 
 @interface FBSystemService : NSObject
