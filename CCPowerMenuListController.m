@@ -55,6 +55,8 @@ NSUserDefaults *preferences;
 - (void)updateList {
 	if (![preferences objectForKey:@"itemOrder" inDomain:domain]) {
 		self.items = [[NSArray arrayWithObjects:@"respring", @"safemode", @"userspace", @"reboot", @"shutdown", nil] mutableCopy];
+		// Persist right away — previously this order only reached the module if a row was dragged.
+		[preferences setObject:self.items forKey:@"itemOrder" inDomain:domain];
 	} else {
 		self.items = [[preferences objectForKey:@"itemOrder" inDomain:domain] mutableCopy];
 	}
@@ -66,6 +68,7 @@ NSUserDefaults *preferences;
 		[self.itemStates setObject:@YES forKey:@"userspace"];
 		[self.itemStates setObject:@YES forKey:@"reboot"];
 		[self.itemStates setObject:@YES forKey:@"shutdown"];
+		[preferences setObject:self.itemStates forKey:@"itemStates" inDomain:domain];
 	} else {
 		self.itemStates = [[preferences objectForKey:@"itemStates" inDomain:domain] mutableCopy];
 	}

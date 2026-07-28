@@ -17,19 +17,26 @@
 }
 - (void)loadItems {
     [self removeAllActions];
-    NSArray *itemOrder = [preferences objectForKey:@"itemOrder"];
+    // Settings only persists itemOrder once a row is dragged, so fall back to the same default
+    // order the settings list starts from — otherwise the menu comes up empty.
+    NSArray *itemOrder = [preferences objectForKey:@"itemOrder" inDomain:domain];
+    if (!itemOrder.count) {
+        itemOrder = @[@"respring", @"safemode", @"userspace", @"reboot", @"shutdown"];
+    }
     for (NSString *identifier in itemOrder) {
         [self addActionForIdentifier:identifier];
     }
 }
 - (void)addActionForIdentifier:(NSString *)identifier {
-    NSMutableDictionary *itemStates = [preferences objectForKey:@"itemStates" inDomain:domain];
-    if ([[itemStates objectForKey:identifier] boolValue] == YES) {
+    NSDictionary *itemStates = [preferences objectForKey:@"itemStates" inDomain:domain];
+    // No states written yet means nothing has been switched off, so everything is enabled.
+    NSNumber *state = [itemStates objectForKey:identifier];
+    if (!state || [state boolValue] == YES) {
         if ([identifier isEqualToString:@"respring"]) {
             [self addActionWithTitle:@"Respring" subtitle:@"Reloads SpringBoard" glyph:[UIImage systemImageNamed:@"arrow.clockwise.circle"] handler:^(void){
                 pid_t pid;
                 const char* args[] = {"killall", "backboardd", NULL};
-                posix_spawn(&pid, ROOT_PATH("/usr/bin/killall"), NULL, NULL, (char* const*)args, NULL);	
+                posix_spawn(&pid, ROOT_PATH("/usr/bin/killall"), NULL, NULL, (char* const*)args, NULL);
             }];
         } else if ([identifier isEqualToString:@"safemode"]) {
             [self addActionWithTitle:@"Safe Mode" subtitle:@"Restarts SpringBoard in Safe Mode" glyph:[UIImage systemImageNamed:@"exclamationmark.arrow.triangle.2.circlepath"] handler:^(void){
@@ -78,6 +85,14 @@
 
     _preferredExpandedContentWidth = WIDTH * 0.8;
     _preferredExpandedContentHeight = HEIGHT * 0.8;
+
+    // viewWillTransitionToSize: never fires for a CC module on iOS 16, so it can't be the only
+    // thing that populates the menu.
+    [self loadItems];
+}
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self loadItems];
 }
 - (void)_updateMenuItemsSeparatorVisiblity {
 

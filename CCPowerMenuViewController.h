@@ -7,8 +7,12 @@
 #include <sys/sysctl.h>
 
 #define WIDTH [UIScreen mainScreen].bounds.size.width
-#define HEIGHT [UIScreen mainScreen].bounds.size.width
-#define preferences [[NSUserDefaults standardUserDefaults] initWithSuiteName:@"com.mtac.ccpowermenu"]
+#define HEIGHT [UIScreen mainScreen].bounds.size.height
+
+// NB: never do [[NSUserDefaults standardUserDefaults] initWithSuiteName:...] — that re-inits the
+// host process' shared singleton in place and swaps its search domain, which nukes SpringBoard's
+// own defaults. Read through objectForKey:inDomain: instead; it doesn't touch the singleton.
+#define preferences [NSUserDefaults standardUserDefaults]
 
 static NSString *domain = @"com.mtac.ccpowermenu";
 
