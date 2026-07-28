@@ -34,9 +34,12 @@
     if (!state || [state boolValue] == YES) {
         if ([identifier isEqualToString:@"respring"]) {
             [self addActionWithTitle:@"Respring" subtitle:@"Reloads SpringBoard" glyph:[UIImage systemImageNamed:@"arrow.clockwise.circle"] handler:^(void){
-                pid_t pid;
-                const char* args[] = {"killall", "backboardd", NULL};
-                posix_spawn(&pid, ROOT_PATH("/usr/bin/killall"), NULL, NULL, (char* const*)args, NULL);
+                // Do NOT kill backboardd here: relaunching the render server needs
+                // com.apple.appletv.pbs.allow-relaunch-backboardd (which is why sbreload carries it).
+                // Killing it from SpringBoard just takes the display server down for good.
+                // exitAndRelaunch: restarts SpringBoard only, which is what a respring is.
+                FBSystemService *systemService = [%c(FBSystemService) sharedInstance];
+                [systemService exitAndRelaunch:YES];
             }];
         } else if ([identifier isEqualToString:@"safemode"]) {
             [self addActionWithTitle:@"Safe Mode" subtitle:@"Restarts SpringBoard in Safe Mode" glyph:[UIImage systemImageNamed:@"exclamationmark.arrow.triangle.2.circlepath"] handler:^(void){

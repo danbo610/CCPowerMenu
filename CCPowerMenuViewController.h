@@ -82,4 +82,5 @@ typedef struct CCUILayoutSize {
 @interface FBSystemService : NSObject
 + (id)sharedInstance;
 - (void)shutdownAndReboot:(BOOL)arg0;
+- (void)exitAndRelaunch:(BOOL)arg0;
 @end
