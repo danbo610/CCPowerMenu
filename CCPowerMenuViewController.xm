@@ -59,6 +59,7 @@ static const NSTimeInterval kLongPressDuration = 0.5;
     switch (gesture.state) {
         case UIGestureRecognizerStateBegan: {
             self.longPressFired = NO;
+            self.pressInProgress = YES;
             __weak typeof(self) weakSelf = self;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kLongPressDuration * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 if (gesture.state != UIGestureRecognizerStateBegan && gesture.state != UIGestureRecognizerStateChanged) {
@@ -77,12 +78,14 @@ static const NSTimeInterval kLongPressDuration = 0.5;
             break;
         }
         case UIGestureRecognizerStateEnded:
+            self.pressInProgress = NO;
             if (!self.longPressFired) {
                 [self openMenu];
             }
             break;
         case UIGestureRecognizerStateCancelled:
         case UIGestureRecognizerStateFailed:
+            self.pressInProgress = NO;
             self.longPressFired = NO;
             break;
         default:
@@ -91,9 +94,15 @@ static const NSTimeInterval kLongPressDuration = 0.5;
 }
 - (void)openMenu {
     UIViewController *container = self.parentViewController;
-    if ([container respondsToSelector:@selector(expandModule)]) {
-        [(CCUIContentModuleContainerViewController *)container expandModule];
+    if (![container respondsToSelector:@selector(expandModule)]) {
+        return;
     }
+    self.allowExpansion = YES;
+    [(CCUIContentModuleContainerViewController *)container expandModule];
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        weakSelf.allowExpansion = NO;
+    });
 }
 - (void)respringNow {
     // Do NOT kill backboardd here: relaunching the render server needs
@@ -243,8 +252,16 @@ static const NSTimeInterval kLongPressDuration = 0.5;
 - (BOOL)_shouldShowFooterSeparator {
     return NO;
 }
+// Control Center runs its own press-and-hold expansion through a _UIControlCenterClickInteraction
+// on the container, in parallel with the gesture this class handles — traced: the menu opened
+// with neither openMenu nor expandModule involved. While a finger is down on the icon that press
+// belongs to the respring shortcut, so the gate stays shut; openMenu opens it for its own call.
+// Any other time it answers YES, so nothing else that asks gets a surprise.
 - (BOOL)shouldBeginTransitionToExpandedContentModule {
-    return YES;
+    if (self.allowExpansion) {
+        return YES;
+    }
+    return !self.pressInProgress;
 }
 - (CGFloat)_separatorHeight {
     return 0.0;

@@ -87,6 +87,8 @@ typedef struct CCUILayoutSize {
 @property (nonatomic, strong) UIActivityIndicatorView *spinnerIndicatorView;
 @property (nonatomic, strong) UIWindow *confirmationWindow;
 @property (nonatomic, assign) BOOL longPressFired;
+@property (nonatomic, assign) BOOL pressInProgress;
+@property (nonatomic, assign) BOOL allowExpansion;
 - (void)confirmActionWithTitle:(NSString *)title message:(NSString *)message confirmTitle:(NSString *)confirmTitle handler:(void (^)(void))handler;
 - (void)respringWithConfirmation;
 - (void)respringNow;
