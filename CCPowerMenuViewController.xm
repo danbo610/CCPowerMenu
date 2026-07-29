@@ -130,6 +130,59 @@ static NSString *CCPMUptimeText(void) {
 
     return entries;
 }
+// LetMeBlock makes mDNSResponder honour /etc/hosts. Choicy is what can keep it from loading:
+// its globalDeniedTweaks list is consulted unconditionally for every process, daemons included,
+// and holds dylib names with the extension stripped. Toggling the entry is the whole mechanism.
+//
+// Done exactly the way Choicy's own settings screen does it — read the plist, edit it, write it
+// back and post its notification (Choicy's writePreferences() is a plain writeToFile:, not
+// CFPreferences). Going through NSUserDefaults instead would put cfprefsd's cached copy of the
+// domain in the way and could write back stale values over settings made in Choicy itself.
+static NSString *const kChoicyGlobalDeniedTweaksKey = @"globalDeniedTweaks";
+static NSString *const kLetMeBlockTweakName = @"LetMeBlock";
+
+- (BOOL)isLetMeBlockInstalled {
+    NSFileManager *manager = [NSFileManager defaultManager];
+    // Both halves have to be there: the tweak to toggle, and Choicy to do the toggling.
+    return [manager fileExistsAtPath:@(ROOT_PATH("/Library/MobileSubstrate/DynamicLibraries/LetMeBlock.dylib"))]
+        && [manager fileExistsAtPath:@(ROOT_PATH("/Library/MobileSubstrate/DynamicLibraries/   Choicy.dylib"))];
+}
+- (NSString *)choicyPreferencesPath {
+    return @(ROOT_PATH("/var/mobile/Library/Preferences/com.opa334.choicyprefs.plist"));
+}
+- (BOOL)isLetMeBlockEnabled {
+    NSDictionary *choicyPreferences = [NSDictionary dictionaryWithContentsOfFile:[self choicyPreferencesPath]];
+    NSArray *denied = choicyPreferences[kChoicyGlobalDeniedTweaksKey];
+    return ![denied containsObject:kLetMeBlockTweakName];
+}
+- (void)setLetMeBlockEnabled:(BOOL)enabled {
+    NSString *path = [self choicyPreferencesPath];
+    NSMutableDictionary *choicyPreferences = [[NSDictionary dictionaryWithContentsOfFile:path] mutableCopy];
+    if (!choicyPreferences) {
+        choicyPreferences = [NSMutableDictionary dictionary];
+    }
+    NSMutableArray *denied = [choicyPreferences[kChoicyGlobalDeniedTweaksKey] mutableCopy];
+    if (!denied) {
+        denied = [NSMutableArray array];
+    }
+
+    if (enabled) {
+        [denied removeObject:kLetMeBlockTweakName];
+    } else if (![denied containsObject:kLetMeBlockTweakName]) {
+        [denied addObject:kLetMeBlockTweakName];
+    }
+
+    choicyPreferences[kChoicyGlobalDeniedTweaksKey] = [denied copy];
+    [choicyPreferences writeToFile:path atomically:YES];
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+        CFSTR("com.opa334.choicyprefs/ReloadPrefs"), NULL, NULL, YES);
+
+    pid_t pid;
+    const char* args[] = {"ccpowermenu-helper", "restart-mdns", NULL};
+    posix_spawn(&pid, ROOT_PATH("/usr/libexec/ccpowermenu-helper"), NULL, NULL, (char* const*)args, NULL);
+
+    [self loadItems];
+}
 // Plain text form, used both as the module's subtitle and to measure the header.
 - (NSString *)deviceStatusText {
     NSMutableArray *lines = [NSMutableArray array];
@@ -314,10 +367,18 @@ static NSString *CCPMUptimeText(void) {
     [self removeAllActions];
     // Settings only persists itemOrder once a row is dragged, so fall back to the same default
     // order the settings list starts from — otherwise the menu comes up empty.
-    NSArray *itemOrder = [preferences objectForKey:@"itemOrder" inDomain:domain];
-    if (!itemOrder.count) {
-        itemOrder = @[@"respring", @"safemode", @"userspace", @"reboot", @"shutdown"];
-    }
+    NSArray *defaultOrder = @[@"letmeblock", @"respring", @"safemode", @"userspace", @"reboot", @"shutdown"];
+    NSArray *stored = [preferences objectForKey:@"itemOrder" inDomain:domain];
+    NSMutableArray *itemOrder = stored.count ? [stored mutableCopy] : [defaultOrder mutableCopy];
+
+    // A stored order predates any item added later, so fold the missing ones in at the position
+    // they have by default instead of leaving them out of the menu entirely.
+    [defaultOrder enumerateObjectsUsingBlock:^(NSString *identifier, NSUInteger index, BOOL *stop) {
+        if (![itemOrder containsObject:identifier]) {
+            [itemOrder insertObject:identifier atIndex:MIN(index, itemOrder.count)];
+        }
+    }];
+
     for (NSString *identifier in itemOrder) {
         [self addActionForIdentifier:identifier];
     }
@@ -691,8 +752,22 @@ static const CGFloat kMaximumExpandedHeightRatio = 0.9;
             [self addActionWithTitle:@"重启用户空间" subtitle:@"保留内核,仅重启用户态" glyph:[UIImage systemImageNamed:@"person.crop.circle.badge.checkmark"] handler:^(void){
                 [weakSelf confirmActionWithTitle:@"确定要重启用户空间吗?" message:@"所有 App 都会关闭,用户态将重新启动,越狱保持有效。" confirmTitle:@"重启用户空间" handler:^{
                     pid_t pid;
-                    const char* args[] = {"userspace-reboot", NULL};
-                    posix_spawn(&pid, ROOT_PATH("/usr/libexec/userspace-reboot"), NULL, NULL, (char* const*)args, NULL);
+                    const char* args[] = {"ccpowermenu-helper", "userspace-reboot", NULL};
+                    posix_spawn(&pid, ROOT_PATH("/usr/libexec/ccpowermenu-helper"), NULL, NULL, (char* const*)args, NULL);
+                }];
+            }];
+        } else if ([identifier isEqualToString:@"letmeblock"]) {
+            if (![self isLetMeBlockInstalled]) {
+                return;
+            }
+            BOOL enabled = [self isLetMeBlockEnabled];
+            NSString *title = enabled ? @"禁用 LetMeBlock" : @"启用 LetMeBlock";
+            [self addActionWithTitle:title subtitle:@"切换自定义 DNS 解析的启停" glyph:[UIImage systemImageNamed:@"network"] handler:^(void){
+                [weakSelf confirmActionWithTitle:[NSString stringWithFormat:@"确定要%@ LetMeBlock 吗?", enabled ? @"禁用" : @"启用"]
+                                         message:enabled ? @"自定义 DNS 解析将停止,mDNSResponder 会重启。" : @"自定义 DNS 解析将恢复,mDNSResponder 会重启。"
+                                    confirmTitle:enabled ? @"禁用" : @"启用"
+                                         handler:^{
+                    [weakSelf setLetMeBlockEnabled:!enabled];
                 }];
             }];
         } else if ([identifier isEqualToString:@"reboot"]) {

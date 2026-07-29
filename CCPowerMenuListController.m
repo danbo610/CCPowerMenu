@@ -35,7 +35,7 @@ NSUserDefaults *preferences;
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
 	NSInteger rows = 0;
 	if (section == 0) {
-		rows = 5;
+		rows = self.items.count;
 	} else if (section == 1) {
 		rows = 0;
 	}
@@ -53,12 +53,19 @@ NSUserDefaults *preferences;
 	return YES;
 }
 - (void)updateList {
+	NSArray *defaultOrder = @[@"letmeblock", @"respring", @"safemode", @"userspace", @"reboot", @"shutdown"];
 	if (![preferences objectForKey:@"itemOrder" inDomain:domain]) {
-		self.items = [[NSArray arrayWithObjects:@"respring", @"safemode", @"userspace", @"reboot", @"shutdown", nil] mutableCopy];
+		self.items = [defaultOrder mutableCopy];
 		// Persist right away — previously this order only reached the module if a row was dragged.
 		[preferences setObject:self.items forKey:@"itemOrder" inDomain:domain];
 	} else {
 		self.items = [[preferences objectForKey:@"itemOrder" inDomain:domain] mutableCopy];
+		// Same fold-in the module does, so a stored order still lists items added later.
+		[defaultOrder enumerateObjectsUsingBlock:^(NSString *identifier, NSUInteger index, BOOL *stop) {
+			if (![self.items containsObject:identifier]) {
+				[self.items insertObject:identifier atIndex:MIN(index, self.items.count)];
+			}
+		}];
 	}
 
 	if (![preferences objectForKey:@"itemStates" inDomain:domain]) {
@@ -68,6 +75,7 @@ NSUserDefaults *preferences;
 		[self.itemStates setObject:@YES forKey:@"userspace"];
 		[self.itemStates setObject:@YES forKey:@"reboot"];
 		[self.itemStates setObject:@YES forKey:@"shutdown"];
+		[self.itemStates setObject:@YES forKey:@"letmeblock"];
 		[preferences setObject:self.itemStates forKey:@"itemStates" inDomain:domain];
 	} else {
 		self.itemStates = [[preferences objectForKey:@"itemStates" inDomain:domain] mutableCopy];
@@ -96,6 +104,8 @@ NSUserDefaults *preferences;
 		title = @"Restart";
 	} else if ([itemType isEqualToString:@"shutdown"]) {
 		title = @"Shut Down";
+	} else if ([itemType isEqualToString:@"letmeblock"]) {
+		title = @"LetMeBlock";
 	} 
 	
 	[content setText:title];
@@ -137,7 +147,7 @@ NSUserDefaults *preferences;
 		titleLabel.textAlignment = NSTextAlignmentCenter;
 		
 		NSString *primary = @"CCPowerMenu";
-		NSString *secondary = @"v1.0.10 © MTAC";
+		NSString *secondary = @"v1.0.11 © MTAC";
 
 		NSMutableAttributedString *final = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@\n%@", primary, secondary]];
 		[final addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:18 weight:UIFontWeightSemibold] range:[final.string rangeOfString:primary]];

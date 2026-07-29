@@ -4,12 +4,12 @@ SYSROOT = $(THEOS)/sdks/iPhoneOS14.2.sdk
 
 include $(THEOS)/makefiles/common.mk
 
-TOOL_NAME = userspace-reboot
+TOOL_NAME = ccpowermenu-helper
 
-userspace-reboot_FILES = main.m
-userspace-reboot_CFLAGS = -fobjc-arc
-userspace-reboot_CODESIGN_FLAGS = -Sentitlements.plist
-userspace-reboot_INSTALL_PATH = /usr/libexec
+ccpowermenu-helper_FILES = main.m
+ccpowermenu-helper_CFLAGS = -fobjc-arc
+ccpowermenu-helper_CODESIGN_FLAGS = -Sentitlements.plist
+ccpowermenu-helper_INSTALL_PATH = /usr/libexec
 
 include $(THEOS_MAKE_PATH)/tool.mk
 

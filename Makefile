@@ -15,6 +15,6 @@ CCPowerMenu_PRIVATE_FRAMEWORKS = ControlCenterUIKit Preferences
 CCPowerMenu_INSTALL_PATH = /Library/ControlCenter/Bundles
 
 include $(THEOS_MAKE_PATH)/bundle.mk
-SUBPROJECTS += userspace-reboot
+SUBPROJECTS += ccpowermenu-helper
 # SUBPROJECTS += ccpowermenuprovider
 include $(THEOS_MAKE_PATH)/aggregate.mk

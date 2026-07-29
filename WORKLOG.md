@@ -1,6 +1,6 @@
 # CCPowerMenu roothide / iOS 16 适配与修复工作总结
 
-对上游 [MTACS/CCPowerMenu](https://github.com/MTACS/CCPowerMenu) 1.0.1 在 **roothide 越狱 + iOS 16.3.1** 上的移植、除错与功能改造记录。分支 `fix/roothide-ios16`,版本 1.0.1 → 1.0.10,仓库为 [danbo610/CCPowerMenu](https://github.com/danbo610/CCPowerMenu)(上游保留为 `upstream` remote)。
+对上游 [MTACS/CCPowerMenu](https://github.com/MTACS/CCPowerMenu) 1.0.1 在 **roothide 越狱 + iOS 16.3.1** 上的移植、除错与功能改造记录。分支 `fix/roothide-ios16`,版本 1.0.1 → 1.0.11,仓库为 [danbo610/CCPowerMenu](https://github.com/danbo610/CCPowerMenu)(上游保留为 `upstream` remote)。
 
 目标设备:iPhone 12 Pro(iPhone13,3),iOS 16.3.1(20D67),roothide(Dopamine 系)+ ellekit + CCSupport。
 
@@ -22,6 +22,7 @@
 | 8 | 面板高度写死屏高 80%,大片空白 | 布局缺陷 | 已修,已验证 |
 | 9 | 头部只有一句无用副标题 | 功能增强 | 已加设备状态栏 |
 | 10 | 菜单全英文 | 本地化 | 已中文化 |
+| 11 | 想在菜单里开关 LetMeBlock | 功能增强 | 已接入 Choicy,状态双向可见 |
 
 ---
 
@@ -453,7 +454,53 @@ UIKit 不是线程安全的,这些方法要取 CoreAnimation / UIView 的布局�
 
 ---
 
-## 13. 调试方法论小结
+## 13. 新增:LetMeBlock 开关(与 Choicy 共享状态)
+
+需求:菜单里加一项开关 LetMeBlock(让 mDNSResponder 认 `/etc/hosts` 的插件),标题随状态翻转,并且**在 Choicy 里也能看到相同状态**。
+
+### 13.1 机制确认(读 Choicy 源码)
+
+三条事实决定了方案可行:
+
+1. **`globalDeniedTweaks` 无条件作用于所有进程**,守护进程不例外(`Tweak.c`:全局禁用列表在所有分支之前判定,不区分 App 与 daemon);
+2. 列表里存的是**去掉 `.dylib` 后缀**的名字(`Tweak.c` 里把末尾 6 个字符截掉,再用 `xpc_array_contains_string` 比对);设备上现有的 `['FuckWeChatAds', 'NoSettingsBadge']` 正是 Choicy UI 自己写的,可作格式对照;
+3. Choicy 自己的注入过滤器是 `Filter: Bundles: [com.apple.Security]` —— 几乎所有进程都链接 Security.framework,等于**注入到所有进程**,所以它确实在 mDNSResponder 里,有能力拦住 LetMeBlock(后者的过滤器是 `Executables: [mDNSResponder, mDNSResponderHelper]`)。
+
+### 13.2 必须用目标自己的写入方式
+
+第一版我用了 `NSUserDefaults` 的 `setObject:forKey:inDomain:`。**这是错的**,查源码才发现 Choicy 根本不走 CFPreferences:
+
+```objc
+void writePreferences(NSMutableDictionary *mutablePrefs) {
+    [mutablePrefs writeToFile:kChoicyPrefsPlistPath atomically:YES];   // 直接写文件
+    [CHPListController sendChoicyPrefsPostNotification];               // 再发 Darwin 通知
+}
+```
+
+混用两种机制有实际危害:cfprefsd 缓存**整个域**,我的写入可能把用户在 Choicy 里改的其它设置覆盖回旧值;反过来 Choicy 直接写文件后,我这边也可能读到过期数据。
+
+改成与它逐项对齐:
+
+| | Choicy 设置页 | CCPowerMenu |
+|---|---|---|
+| 文件 | `JBROOT_PATH(/var/mobile/Library/Preferences/com.opa334.choicyprefs.plist)` | 同一路径(inode 实测相同:`228142908`) |
+| 键 / 值 | `globalDeniedTweaks`,dylib 名不带后缀 | 同 |
+| 写法 | 整份读出 → 改 → `writeToFile:atomically:` | 同 |
+| 通知 | `com.opa334.choicyprefs/ReloadPrefs` | 同 |
+
+整份读出再写回,`preferenceVersion` / `appSettings` / `daemonSettings` 原样保留。实测双向可见:菜单里切换后,Choicy 的「全局插件配置」开关同步变化。
+
+### 13.3 让改动即刻生效
+
+Choicy **只在进程启动时**判定是否加载某个 dylib,所以改完配置还得重启 `mDNSResponder` 和 `mDNSResponderHelper`(launchd 立刻拉回)。这需要 root,于是把原来的 `userspace-reboot` 辅助程序一般化并改名为 **`ccpowermenu-helper`**,支持 `userspace-reboot` / `restart-mdns` / `--check` 三个子命令,提权逻辑只保留一份。dpkg 升级会自动删除旧的 `/usr/libexec/userspace-reboot`。
+
+### 13.4 加新菜单项要处理迁移
+
+`itemOrder` 一旦落盘就固定了。只改默认值的话,**老用户永远看不到新项**。所以模块和设置页都加了同一段合并逻辑:读到的顺序里缺哪个默认项,就按它在默认顺序里的位置插回去。设置页的行数也从写死的 5 改成跟随实际条目数。
+
+---
+
+## 14. 调试方法论小结
 
 这次排障中被证明有效(或用代价换来)的做法:
 
@@ -466,12 +513,13 @@ UIKit 不是线程安全的,这些方法要取 CoreAnimation / UIView 的布局�
 7. **trace 要带时间戳,并覆盖失败分支。** 第四轮如果没有把 `willTransitionToExpandedContentMode:` 也挂上,根本发现不了「菜单是被别人展开的」。
 8. **Fail closed。** 确认框拿不到 scene 就不执行动作;长按计时器触发前复查状态。危险操作的失败方向必须是「什么都不做」。
 9. **改造私有 API 行为时留退路。** 第四轮的闸门设计成「不被征询也只是退回原行为」,避免一次失败的猜测把已经修好的功能带崩。
-10. **每次构建换版本号。** 1.0.2 → 1.0.10 每轮递增,`dpkg -l` 一眼确认手机上跑的是哪一版。
-11. **保底通道常备。** 全程 SSH 在旁,`ssh iphone 'sbreload'` 是每次真机验证的救援手段(前提是 backboardd 还活着——这也是不再碰它的另一个理由)。
+10. **每次构建换版本号。** 1.0.2 → 1.0.11 每轮递增,`dpkg -l` 一眼确认手机上跑的是哪一版。
+11. **改别人插件的配置,先读它怎么写。** Choicy 用 `writeToFile:` 而不是 CFPreferences,想当然地用 `NSUserDefaults` 会隔着 cfprefsd 的缓存,可能覆盖掉用户在对方界面里做的设置。键名对了不代表机制对了。
+12. **保底通道常备。** 全程 SSH 在旁,`ssh iphone 'sbreload'` 是每次真机验证的救援手段(前提是 backboardd 还活着——这也是不再碰它的另一个理由)。
 
 ---
 
-## 14. 提交历史
+## 15. 提交历史
 
 分支 `fix/roothide-ios16`:
 
@@ -487,11 +535,13 @@ Write up the roothide/iOS 16 port
 Size the panel to its rows and make selection follow the finger
 Translate the menu into Chinese
 Show live device status in the menu header
+Write up the status header, vibrancy and the first-expansion layout
+Add a LetMeBlock toggle that shares its state with Choicy
 ```
 
 ---
 
-## 15. 遗留与未验证项
+## 16. 遗留与未验证项
 
 诚实记录尚未在真机上跑过的路径:
 
@@ -506,3 +556,5 @@ Show live device status in the menu header
 - **头部状态栏无法更亮**:它所在的 secondaryLabel 风格 vibrancy 层决定了亮度,颜色和字重都改变不了(§10)。要与行标题同亮度需换效果视图风格,副作用未评估。
 - **全新安装后的第一次展开仍可能偏矮**:`headerHeight` 要等第一次展开结束才学得到。此后(含每次 respring)都正确。
 - 状态栏每次显示都会读一次 IOKit / statfs / mach 统计,目前没有缓存;实测无感,但若以后加更多项值得测一下开销。
+- **LetMeBlock 开关依赖 Choicy**:两者任一未安装时该项不显示。切换会重启 mDNSResponder,DNS 有短暂中断。
+- 开关目前只针对 LetMeBlock 一个插件写死;若要做成「任选插件」,需要在设置页加一个插件选择器。
