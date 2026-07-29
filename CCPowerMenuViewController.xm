@@ -4,7 +4,7 @@
 - (instancetype)initWithNibName:(NSString *)name bundle:(NSBundle *)bundle {
     self = [super initWithNibName:name bundle:bundle];
     if (self) {
-        self.title = @"Power Options";
+        self.title = @"电源选项";
         self.subtitle = @"Scroll down for more options";
 
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(reloadItems) name:@"ccpowermenu/ReloadItems" object:nil];
@@ -278,7 +278,7 @@ static const CGFloat kMaximumExpandedHeightRatio = 0.9;
 }
 - (void)respringWithConfirmation {
     __weak typeof(self) weakSelf = self;
-    [self confirmActionWithTitle:@"确定要注销吗?" message:@"SpringBoard 将会重新启动。" confirmTitle:@"注销" handler:^{
+    [self confirmActionWithTitle:@"确定要注销设备吗?" message:@"SpringBoard 将会重新启动。" confirmTitle:@"注销" handler:^{
         [weakSelf respringNow];
     }];
 }
@@ -331,11 +331,11 @@ static const CGFloat kMaximumExpandedHeightRatio = 0.9;
     NSNumber *state = [itemStates objectForKey:identifier];
     if (!state || [state boolValue] == YES) {
         if ([identifier isEqualToString:@"respring"]) {
-            [self addActionWithTitle:@"Respring" subtitle:@"Reloads SpringBoard" glyph:[UIImage systemImageNamed:@"arrow.clockwise.circle"] handler:^(void){
+            [self addActionWithTitle:@"注销设备" subtitle:@"重新载入 SpringBoard" glyph:[UIImage systemImageNamed:@"arrow.clockwise.circle"] handler:^(void){
                 [weakSelf respringWithConfirmation];
             }];
         } else if ([identifier isEqualToString:@"safemode"]) {
-            [self addActionWithTitle:@"Safe Mode" subtitle:@"Restarts SpringBoard in Safe Mode" glyph:[UIImage systemImageNamed:@"exclamationmark.arrow.triangle.2.circlepath"] handler:^(void){
+            [self addActionWithTitle:@"安全模式" subtitle:@"停用所有插件后注销" glyph:[UIImage systemImageNamed:@"exclamationmark.arrow.triangle.2.circlepath"] handler:^(void){
                 [weakSelf confirmActionWithTitle:@"确定要进入安全模式吗?" message:@"SpringBoard 将在停用插件的状态下重启。" confirmTitle:@"安全模式" handler:^{
                     pid_t pid;
                     const char* args[] = {"killall", "-SEGV", "SpringBoard", NULL};
@@ -343,23 +343,23 @@ static const CGFloat kMaximumExpandedHeightRatio = 0.9;
                 }];
             }];
         } else if ([identifier isEqualToString:@"userspace"]) {
-            [self addActionWithTitle:@"Reboot Userspace" subtitle:@"Restarts userspace but keeps kernel loaded" glyph:[UIImage systemImageNamed:@"person.crop.circle.badge.checkmark"] handler:^(void){
-                [weakSelf confirmActionWithTitle:@"确定要重启用户态吗?" message:@"所有 App 都会关闭,用户态将重新启动,越狱保持有效。" confirmTitle:@"重启用户态" handler:^{
+            [self addActionWithTitle:@"重启用户空间" subtitle:@"保留内核,仅重启用户态" glyph:[UIImage systemImageNamed:@"person.crop.circle.badge.checkmark"] handler:^(void){
+                [weakSelf confirmActionWithTitle:@"确定要重启用户空间吗?" message:@"所有 App 都会关闭,用户态将重新启动,越狱保持有效。" confirmTitle:@"重启用户空间" handler:^{
                     pid_t pid;
                     const char* args[] = {"userspace-reboot", NULL};
                     posix_spawn(&pid, ROOT_PATH("/usr/libexec/userspace-reboot"), NULL, NULL, (char* const*)args, NULL);
                 }];
             }];
         } else if ([identifier isEqualToString:@"reboot"]) {
-            [self addActionWithTitle:@"Restart" subtitle:@"Reboots device normally" glyph:[UIImage systemImageNamed:@"power"] handler:^(void){
+            [self addActionWithTitle:@"重启设备" subtitle:@"正常重新启动设备" glyph:[UIImage systemImageNamed:@"power"] handler:^(void){
                 [weakSelf confirmActionWithTitle:@"确定要重启设备吗?" message:@"设备将会重新启动。" confirmTitle:@"重启" handler:^{
                     FBSystemService *systemService = [%c(FBSystemService) sharedInstance];
                     [systemService shutdownAndReboot:YES];
                 }];
             }];
         } else if ([identifier isEqualToString:@"shutdown"]) {
-            [self addActionWithTitle:@"Shutdown" subtitle:@"Powers off device" glyph:[UIImage systemImageNamed:@"togglepower"] handler:^(void){
-                [weakSelf confirmActionWithTitle:@"确定要关机吗?" message:@"设备将会关闭电源。" confirmTitle:@"关机" handler:^{
+            [self addActionWithTitle:@"关闭设备" subtitle:@"关闭设备电源" glyph:[UIImage systemImageNamed:@"togglepower"] handler:^(void){
+                [weakSelf confirmActionWithTitle:@"确定要关闭设备吗?" message:@"设备将会关闭电源。" confirmTitle:@"关闭设备" handler:^{
                     FBSystemService *systemService = [%c(FBSystemService) sharedInstance];
                     [systemService shutdownAndReboot:NO];
                 }];
