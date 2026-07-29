@@ -1,6 +1,6 @@
 # CCPowerMenu roothide / iOS 16 适配与修复工作总结
 
-对上游 [MTACS/CCPowerMenu](https://github.com/MTACS/CCPowerMenu) 1.0.1 在 **roothide 越狱 + iOS 16.3.1** 上的移植、除错与功能改造记录。分支 `fix/roothide-ios16`,版本 1.0.1 → 1.0.12,仓库为 [danbo610/CCPowerMenu](https://github.com/danbo610/CCPowerMenu)(上游保留为 `upstream` remote)。
+对上游 [MTACS/CCPowerMenu](https://github.com/MTACS/CCPowerMenu) 1.0.1 在 **roothide 越狱 + iOS 16.3.1** 上的移植、除错与功能改造记录。分支 `fix/roothide-ios16`,版本 1.0.1 → 1.0.13,仓库为 [danbo610/CCPowerMenu](https://github.com/danbo610/CCPowerMenu)(上游保留为 `upstream` remote)。
 
 目标设备:iPhone 12 Pro(iPhone13,3),iOS 16.3.1(20D67),roothide(Dopamine 系)+ ellekit + CCSupport。
 
@@ -25,6 +25,7 @@
 | 11 | 想在菜单里开关 LetMeBlock | 功能增强 | 已接入 Choicy,状态双向可见 |
 | 12 | 设置页开关与菜单实际显示不一致 | 逻辑分叉 | 已统一 |
 | 13 | 点菜单项后菜单先收回,确认框才弹 | 交互 | 已改为叠加在展开的菜单上 |
+| 14 | 磁贴图标是个停住的菊花,Resources 里找不到 | 观感 | 已换成自绘的同款图标 |
 
 ---
 
@@ -525,7 +526,25 @@ Choicy **只在进程启动时**判定是否加载某个 dylib,所以改完配�
 
 ---
 
-## 15. 调试方法论小结
+## 15. 磁贴图标:那个「转圈」其实是个停住的菊花
+
+Resources 目录里找不到磁贴图标,因为**它根本不是图片**:
+
+```objc
+self.spinnerIndicatorView = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+self.spinnerIndicatorView.hidesWhenStopped = NO;   // 停着也画出来
+[self.view addSubview:self.spinnerIndicatorView];  // 直接贴到磁贴上
+```
+
+上游拿一个**从没 `startAnimating` 过的 `UIActivityIndicatorView`** 当图标使,靠 `hidesWhenStopped = NO` 让它停住仍然渲染。模块自始至终没有设过 `glyphImage`。
+
+改成 PowerSelector 同款(手机轮廓 + 内部一圈渐变辐条)时有个取舍:那是别人的美术资源,**不适合提交进公开仓库**。所以用 Core Graphics 自绘了一个:圆角手机轮廓 + 顶部听筒槽 + 12 根 alpha 从 0.25 渐变到 1.0 的圆头辐条,尺寸沿用 37×37,以 `UIImageRenderingModeAlwaysTemplate` 输出——与菜单行图标同一套画法,正好吃 vibrancy 那套亮度映射(见 §10)。
+
+同时留了加载钩子:`Resources/` 里若存在 `Icon@2x/@3x.png` 就优先使用,想换成任何现成图片都不必改代码。几何参数(`kGlyphBodyWidth` / `kGlyphSpokeInnerRadius` / `kGlyphSpokeCount` 等)都是常量。
+
+---
+
+## 16. 调试方法论小结
 
 这次排障中被证明有效(或用代价换来)的做法:
 
@@ -538,13 +557,13 @@ Choicy **只在进程启动时**判定是否加载某个 dylib,所以改完配�
 7. **trace 要带时间戳,并覆盖失败分支。** 第四轮如果没有把 `willTransitionToExpandedContentMode:` 也挂上,根本发现不了「菜单是被别人展开的」。
 8. **Fail closed。** 确认框拿不到 scene 就不执行动作;长按计时器触发前复查状态。危险操作的失败方向必须是「什么都不做」。
 9. **改造私有 API 行为时留退路。** 第四轮的闸门设计成「不被征询也只是退回原行为」,避免一次失败的猜测把已经修好的功能带崩。
-10. **每次构建换版本号。** 1.0.2 → 1.0.12 每轮递增,`dpkg -l` 一眼确认手机上跑的是哪一版。
+10. **每次构建换版本号。** 1.0.2 → 1.0.13 每轮递增,`dpkg -l` 一眼确认手机上跑的是哪一版。
 11. **改别人插件的配置,先读它怎么写。** Choicy 用 `writeToFile:` 而不是 CFPreferences,想当然地用 `NSUserDefaults` 会隔着 cfprefsd 的缓存,可能覆盖掉用户在对方界面里做的设置。键名对了不代表机制对了。
 12. **保底通道常备。** 全程 SSH 在旁,`ssh iphone 'sbreload'` 是每次真机验证的救援手段(前提是 backboardd 还活着——这也是不再碰它的另一个理由)。
 
 ---
 
-## 16. 提交历史
+## 17. 提交历史
 
 分支 `fix/roothide-ios16`:
 
@@ -563,11 +582,12 @@ Show live device status in the menu header
 Write up the status header, vibrancy and the first-expansion layout
 Add a LetMeBlock toggle that shares its state with Choicy
 Keep the menu open behind the confirmation, and agree with the settings switch
+Draw the tile icon instead of parking a stopped spinner on it
 ```
 
 ---
 
-## 17. 遗留与未验证项
+## 18. 遗留与未验证项
 
 诚实记录尚未在真机上跑过的路径:
 

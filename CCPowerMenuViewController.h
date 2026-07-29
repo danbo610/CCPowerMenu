@@ -101,7 +101,7 @@ typedef struct CCUILayoutSize {
 @property (nonatomic, readonly) CGFloat preferredExpandedContentHeight;
 @property (nonatomic, readonly) CGFloat preferredExpandedContentWidth;
 @property (nonatomic, readonly) BOOL expanded;
-@property (nonatomic, strong) UIActivityIndicatorView *spinnerIndicatorView;
+@property (nonatomic, strong) UIImageView *glyphImageView;
 @property (nonatomic, strong) UIWindow *confirmationWindow;
 @property (nonatomic, assign) BOOL longPressFired;
 @property (nonatomic, assign) BOOL pressInProgress;

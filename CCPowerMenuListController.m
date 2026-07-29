@@ -160,7 +160,7 @@ NSUserDefaults *preferences;
 		titleLabel.textAlignment = NSTextAlignmentCenter;
 		
 		NSString *primary = @"CCPowerMenu";
-		NSString *secondary = @"v1.0.12 © MTAC";
+		NSString *secondary = @"v1.0.13 © MTAC";
 
 		NSMutableAttributedString *final = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@\n%@", primary, secondary]];
 		[final addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:18 weight:UIFontWeightSemibold] range:[final.string rangeOfString:primary]];

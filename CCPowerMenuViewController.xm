@@ -130,6 +130,56 @@ static NSString *CCPMUptimeText(void) {
 
     return entries;
 }
+// The tile's icon. Upstream parked a UIActivityIndicatorView here that is never started, which
+// is why nothing in Resources looked like an icon — it was a stopped spinner standing in for one.
+// Drawn rather than shipped as a PNG so it stays sharp at any size and tints correctly under the
+// panel's vibrancy. Drop an Icon@2x/@3x.png into Resources to use artwork instead.
+- (UIImage *)moduleGlyphImage {
+    UIImage *bundled = [UIImage imageNamed:@"Icon"
+                                  inBundle:[NSBundle bundleForClass:[self class]]
+             compatibleWithTraitCollection:nil];
+    if (bundled) {
+        return [bundled imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    }
+
+    CGSize size = CGSizeMake(kGlyphSide, kGlyphSide);
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+    UIImage *drawn = [renderer imageWithActions:^(UIGraphicsImageRendererContext *rendererContext) {
+        [[UIColor blackColor] setStroke];
+        [[UIColor blackColor] setFill];
+
+        // Phone body.
+        CGFloat lineWidth = 2.0;
+        CGRect body = CGRectMake((size.width - kGlyphBodyWidth) / 2.0,
+                                 (size.height - kGlyphBodyHeight) / 2.0,
+                                 kGlyphBodyWidth, kGlyphBodyHeight);
+        UIBezierPath *outline = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(body, lineWidth / 2.0, lineWidth / 2.0)
+                                                          cornerRadius:5.0];
+        outline.lineWidth = lineWidth;
+        [outline stroke];
+
+        // Notch.
+        CGRect notch = CGRectMake(CGRectGetMidX(body) - 4.5, CGRectGetMinY(body) + lineWidth, 9.0, 2.5);
+        [[UIBezierPath bezierPathWithRoundedRect:notch cornerRadius:1.25] fill];
+
+        // Spokes, fading round the circle the way a stopped activity indicator looks.
+        CGPoint centre = CGPointMake(CGRectGetMidX(body), CGRectGetMidY(body) + 1.0);
+        for (NSInteger spoke = 0; spoke < kGlyphSpokeCount; spoke++) {
+            CGFloat angle = (CGFloat)spoke / kGlyphSpokeCount * 2.0 * M_PI;
+            CGFloat alpha = 0.25 + 0.75 * ((CGFloat)spoke / (kGlyphSpokeCount - 1));
+            UIBezierPath *path = [UIBezierPath bezierPath];
+            [path moveToPoint:CGPointMake(centre.x + cos(angle) * kGlyphSpokeInnerRadius,
+                                          centre.y + sin(angle) * kGlyphSpokeInnerRadius)];
+            [path addLineToPoint:CGPointMake(centre.x + cos(angle) * kGlyphSpokeOuterRadius,
+                                             centre.y + sin(angle) * kGlyphSpokeOuterRadius)];
+            path.lineWidth = 1.8;
+            path.lineCapStyle = kCGLineCapRound;
+            [[UIColor colorWithWhite:0.0 alpha:alpha] setStroke];
+            [path stroke];
+        }
+    }];
+    return [drawn imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+}
 // LetMeBlock makes mDNSResponder honour /etc/hosts. Choicy is what can keep it from loading:
 // its globalDeniedTweaks list is consulted unconditionally for every process, daemons included,
 // and holds dylib names with the extension stripped. Toggling the entry is the whole mechanism.
@@ -359,7 +409,7 @@ static NSString *const kLetMeBlockTweakName = @"LetMeBlock";
     return self;
 }
 - (void)viewWillTransitionToSize:(struct CGSize )arg0 withTransitionCoordinator:(id)arg1 {
-    self.spinnerIndicatorView.hidden = arg0.width > self.view.bounds.size.height;
+    self.glyphImageView.hidden = arg0.width > self.view.bounds.size.height;
     [self loadItems];
 }
 - (void)loadItems {
@@ -395,6 +445,13 @@ static const CGFloat kHeaderTextInset = 8.0;
 static const CGFloat kHeaderTextFontSize = 13.0;
 // One character of breathing room on the left, since the block is left aligned.
 static const CGFloat kHeaderTextIndent = 8.0;
+// Tile glyph geometry.
+static const CGFloat kGlyphSide = 37.0;
+static const CGFloat kGlyphBodyWidth = 23.0;
+static const CGFloat kGlyphBodyHeight = 35.0;
+static const CGFloat kGlyphSpokeInnerRadius = 4.0;
+static const CGFloat kGlyphSpokeOuterRadius = 7.5;
+static const NSInteger kGlyphSpokeCount = 12;
 // However tall the menu wants to be, never let it swallow the whole screen.
 static const CGFloat kMaximumExpandedHeightRatio = 0.9;
 
@@ -799,18 +856,17 @@ static const CGFloat kMaximumExpandedHeightRatio = 0.9;
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    self.spinnerIndicatorView = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
-    self.spinnerIndicatorView.frame = CGRectZero;
-    self.spinnerIndicatorView.color = [UIColor whiteColor];
-    self.spinnerIndicatorView.hidesWhenStopped = NO;
-    self.spinnerIndicatorView.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:self.spinnerIndicatorView];
+    self.glyphImageView = [[UIImageView alloc] initWithImage:[self moduleGlyphImage]];
+    self.glyphImageView.contentMode = UIViewContentModeScaleAspectFit;
+    self.glyphImageView.tintColor = [UIColor whiteColor];
+    self.glyphImageView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:self.glyphImageView];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.spinnerIndicatorView.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
-        [self.spinnerIndicatorView.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
-        [self.spinnerIndicatorView.widthAnchor constraintEqualToConstant:37],
-        [self.spinnerIndicatorView.heightAnchor constraintEqualToConstant:37],
+        [self.glyphImageView.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
+        [self.glyphImageView.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
+        [self.glyphImageView.widthAnchor constraintEqualToConstant:kGlyphSide],
+        [self.glyphImageView.heightAnchor constraintEqualToConstant:kGlyphSide],
     ]];
 
     _preferredExpandedContentWidth = WIDTH * 0.8;
