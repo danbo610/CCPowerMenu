@@ -573,16 +573,22 @@ static const CGFloat kMaximumExpandedHeightRatio = 0.9;
         return;
     }
 
-    UIViewController *container = self.parentViewController;
-    if ([container respondsToSelector:@selector(dismissExpandedModuleAnimated:)]) {
-        [(CCUIContentModuleContainerViewController *)container dismissExpandedModuleAnimated:YES];
-    }
     [item performAction];
 }
 // A row is a UIControl, so a quick tap fires its own action and runs the item without us. Record
 // that so the gesture's own fallback does not run it a second time.
+//
+// Deliberately not passed to super for a menu row: super collapses the menu before running the
+// item, so the confirmation ended up over a closed menu. Running it here keeps the menu open
+// underneath — cancelling leaves it exactly as it was, and a toggle's title updates in place.
 - (void)_handleActionTapped:(id)sender {
     self.actionTappedDuringGesture = YES;
+
+    Class itemViewClass = %c(CCUIMenuModuleItemView);
+    if (itemViewClass && [sender isKindOfClass:itemViewClass]) {
+        [self performActionForMenuItemView:sender];
+        return;
+    }
     [super _handleActionTapped:sender];
 }
 - (void)handleExpandedMenuGesture:(UILongPressGestureRecognizer *)gesture {

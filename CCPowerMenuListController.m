@@ -79,6 +79,19 @@ NSUserDefaults *preferences;
 		[preferences setObject:self.itemStates forKey:@"itemStates" inDomain:domain];
 	} else {
 		self.itemStates = [[preferences objectForKey:@"itemStates" inDomain:domain] mutableCopy];
+		// An item added after these states were written has no entry. The module reads that as
+		// enabled, so record it as enabled here too rather than showing a switch that disagrees
+		// with the menu.
+		__block BOOL addedDefaults = NO;
+		[defaultOrder enumerateObjectsUsingBlock:^(NSString *identifier, NSUInteger index, BOOL *stop) {
+			if (![self.itemStates objectForKey:identifier]) {
+				[self.itemStates setObject:@YES forKey:identifier];
+				addedDefaults = YES;
+			}
+		}];
+		if (addedDefaults) {
+			[preferences setObject:self.itemStates forKey:@"itemStates" inDomain:domain];
+		}
 	}
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -147,7 +160,7 @@ NSUserDefaults *preferences;
 		titleLabel.textAlignment = NSTextAlignmentCenter;
 		
 		NSString *primary = @"CCPowerMenu";
-		NSString *secondary = @"v1.0.11 © MTAC";
+		NSString *secondary = @"v1.0.12 © MTAC";
 
 		NSMutableAttributedString *final = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"%@\n%@", primary, secondary]];
 		[final addAttribute:NSFontAttributeName value:[UIFont systemFontOfSize:18 weight:UIFontWeightSemibold] range:[final.string rangeOfString:primary]];

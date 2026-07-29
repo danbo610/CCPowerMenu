@@ -1,6 +1,6 @@
 # CCPowerMenu roothide / iOS 16 适配与修复工作总结
 
-对上游 [MTACS/CCPowerMenu](https://github.com/MTACS/CCPowerMenu) 1.0.1 在 **roothide 越狱 + iOS 16.3.1** 上的移植、除错与功能改造记录。分支 `fix/roothide-ios16`,版本 1.0.1 → 1.0.11,仓库为 [danbo610/CCPowerMenu](https://github.com/danbo610/CCPowerMenu)(上游保留为 `upstream` remote)。
+对上游 [MTACS/CCPowerMenu](https://github.com/MTACS/CCPowerMenu) 1.0.1 在 **roothide 越狱 + iOS 16.3.1** 上的移植、除错与功能改造记录。分支 `fix/roothide-ios16`,版本 1.0.1 → 1.0.12,仓库为 [danbo610/CCPowerMenu](https://github.com/danbo610/CCPowerMenu)(上游保留为 `upstream` remote)。
 
 目标设备:iPhone 12 Pro(iPhone13,3),iOS 16.3.1(20D67),roothide(Dopamine 系)+ ellekit + CCSupport。
 
@@ -23,6 +23,8 @@
 | 9 | 头部只有一句无用副标题 | 功能增强 | 已加设备状态栏 |
 | 10 | 菜单全英文 | 本地化 | 已中文化 |
 | 11 | 想在菜单里开关 LetMeBlock | 功能增强 | 已接入 Choicy,状态双向可见 |
+| 12 | 设置页开关与菜单实际显示不一致 | 逻辑分叉 | 已统一 |
+| 13 | 点菜单项后菜单先收回,确认框才弹 | 交互 | 已改为叠加在展开的菜单上 |
 
 ---
 
@@ -500,7 +502,30 @@ Choicy **只在进程启动时**判定是否加载某个 dylib,所以改完配�
 
 ---
 
-## 14. 调试方法论小结
+## 14. 两处收尾修正
+
+### 14.1 设置页的开关和菜单说的不是一回事
+
+新加的 LetMeBlock 在菜单里正常显示,但设置页里它的开关是**关**的。两边对"`itemStates` 里没有这个键"给了相反解释:
+
+| | 读法 | 结论 |
+|---|---|---|
+| 模块 | `if (!state \|\| [state boolValue] == YES)` | 缺失 = **启用** |
+| 设置页 | `[[self.itemStates objectForKey:item] boolValue]` | nil 的 `boolValue` = **NO** |
+
+统一成模块那条规则:设置页读到缺失的条目就补 `@YES` 并落盘,此后两边从同一份状态出发。位置本来就一致,是因为 `itemOrder` 的合并逻辑上一版已经加过——这次等于把 `itemStates` 也补齐。落盘时机是**打开一次设置页**。
+
+### 14.2 让确认框叠在展开的菜单上
+
+原先点菜单项,菜单会先收回、确认框才出现。收菜单的**不是我们**:CC 在 `_handleActionTapped:` 里先收再执行动作,所以确认框永远出现在一个已经关掉的菜单前面。
+
+我们本来就覆写了这个方法(用来记标志位防重复执行),现在遇到菜单行**不再调 super**,自己执行动作,CC 也就没机会收菜单。同时去掉了 `performActionForMenuItemView:` 里那句主动 `dismissExpandedModuleAnimated:`。
+
+副作用都是正向的:点「取消」后菜单原样还在;LetMeBlock 这类切换执行完 `loadItems` 就地刷新,**标题当场翻转而菜单不关**。
+
+---
+
+## 15. 调试方法论小结
 
 这次排障中被证明有效(或用代价换来)的做法:
 
@@ -513,13 +538,13 @@ Choicy **只在进程启动时**判定是否加载某个 dylib,所以改完配�
 7. **trace 要带时间戳,并覆盖失败分支。** 第四轮如果没有把 `willTransitionToExpandedContentMode:` 也挂上,根本发现不了「菜单是被别人展开的」。
 8. **Fail closed。** 确认框拿不到 scene 就不执行动作;长按计时器触发前复查状态。危险操作的失败方向必须是「什么都不做」。
 9. **改造私有 API 行为时留退路。** 第四轮的闸门设计成「不被征询也只是退回原行为」,避免一次失败的猜测把已经修好的功能带崩。
-10. **每次构建换版本号。** 1.0.2 → 1.0.11 每轮递增,`dpkg -l` 一眼确认手机上跑的是哪一版。
+10. **每次构建换版本号。** 1.0.2 → 1.0.12 每轮递增,`dpkg -l` 一眼确认手机上跑的是哪一版。
 11. **改别人插件的配置,先读它怎么写。** Choicy 用 `writeToFile:` 而不是 CFPreferences,想当然地用 `NSUserDefaults` 会隔着 cfprefsd 的缓存,可能覆盖掉用户在对方界面里做的设置。键名对了不代表机制对了。
 12. **保底通道常备。** 全程 SSH 在旁,`ssh iphone 'sbreload'` 是每次真机验证的救援手段(前提是 backboardd 还活着——这也是不再碰它的另一个理由)。
 
 ---
 
-## 15. 提交历史
+## 16. 提交历史
 
 分支 `fix/roothide-ios16`:
 
@@ -537,11 +562,12 @@ Translate the menu into Chinese
 Show live device status in the menu header
 Write up the status header, vibrancy and the first-expansion layout
 Add a LetMeBlock toggle that shares its state with Choicy
+Keep the menu open behind the confirmation, and agree with the settings switch
 ```
 
 ---
 
-## 16. 遗留与未验证项
+## 17. 遗留与未验证项
 
 诚实记录尚未在真机上跑过的路径:
 
