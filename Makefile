@@ -10,7 +10,7 @@ BUNDLE_NAME = CCPowerMenu
 CCPowerMenu_BUNDLE_EXTENSION = bundle
 CCPowerMenu_FILES = CCPowerMenu.m CCPowerMenuViewController.xm CCPowerMenuListController.m
 CCPowerMenu_CFLAGS = -fobjc-arc
-CCPowerMenu_FRAMEWORKS = UIKit
+CCPowerMenu_FRAMEWORKS = UIKit IOKit
 CCPowerMenu_PRIVATE_FRAMEWORKS = ControlCenterUIKit Preferences
 CCPowerMenu_INSTALL_PATH = /Library/ControlCenter/Bundles
 

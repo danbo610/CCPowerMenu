@@ -1,11 +1,305 @@
 #import "CCPowerMenuViewController.h"
 
+// Declared by hand so no IOKit headers are needed; passing MACH_PORT_NULL as the port means the
+// default one, which also avoids depending on the kIOMasterPortDefault symbol. This file is
+// compiled as Objective-C++, so the declarations need C linkage to match the library.
+#ifdef __cplusplus
+extern "C" {
+#endif
+CFMutableDictionaryRef IOServiceMatching(const char *name);
+mach_port_t IOServiceGetMatchingService(mach_port_t masterPort, CFDictionaryRef matching);
+kern_return_t IORegistryEntryCreateCFProperties(mach_port_t entry, CFMutableDictionaryRef *properties, CFAllocatorRef allocator, uint32_t options);
+kern_return_t IOObjectRelease(mach_port_t object);
+#ifdef __cplusplus
+}
+#endif
+
+static NSDictionary *CCPMBatteryProperties(void) {
+    CFMutableDictionaryRef matching = IOServiceMatching("AppleSmartBattery");
+    if (!matching) {
+        return nil;
+    }
+    // IOServiceGetMatchingService consumes the matching dictionary.
+    mach_port_t service = IOServiceGetMatchingService(MACH_PORT_NULL, matching);
+    if (!service) {
+        return nil;
+    }
+
+    CFMutableDictionaryRef properties = NULL;
+    NSDictionary *result = nil;
+    if (IORegistryEntryCreateCFProperties(service, &properties, kCFAllocatorDefault, 0) == KERN_SUCCESS && properties) {
+        result = (__bridge_transfer NSDictionary *)properties;
+    }
+    IOObjectRelease(service);
+    return result;
+}
+
+// Decimal GB throughout, so 256GB of storage reads as 256 rather than df's 1024-based 238.
+static const double kBytesPerGigabyte = 1e9;
+
+static NSString *CCPMUptimeText(void) {
+    struct timeval boottime;
+    size_t size = sizeof(boottime);
+    int mib[2] = {CTL_KERN, KERN_BOOTTIME};
+    if (sysctl(mib, 2, &boottime, &size, NULL, 0) != 0 || boottime.tv_sec <= 0) {
+        return nil;
+    }
+
+    NSTimeInterval uptime = [[NSDate date] timeIntervalSince1970] - (NSTimeInterval)boottime.tv_sec;
+    if (uptime < 0.0) {
+        uptime = 0.0;
+    }
+    long totalMinutes = (long)(uptime / 60.0);
+    return [NSString stringWithFormat:@"%ld天%ld小时%ld分",
+        totalMinutes / (24 * 60), (totalMinutes / 60) % 24, totalMinutes % 60];
+}
+
 @implementation CCPowerMenuViewController
+
+// The stock header just said "Scroll down for more options". Show what CCPower shows there
+// instead — battery, uptime, storage and memory — refreshed every time the module appears.
+// Each entry is an SF Symbol name paired with its line of text. Symbols rather than emoji because
+// this panel renders inside a vibrancy effect, which flattens everything drawn into a luminance
+// mask — emoji come out as grey silhouettes, while template symbols are what the material expects
+// (it is how the row glyphs are drawn).
+- (NSArray *)deviceStatusEntries {
+    NSMutableArray *entries = [NSMutableArray array];
+
+    NSDictionary *battery = CCPMBatteryProperties();
+    NSNumber *designCapacity = battery[@"DesignCapacity"];
+    NSNumber *currentCapacity = battery[@"NominalChargeCapacity"] ?: battery[@"AppleRawMaxCapacity"];
+    NSNumber *cycleCount = battery[@"CycleCount"];
+    if (designCapacity.doubleValue > 0.0 && currentCapacity) {
+        [entries addObject:@[@"battery.100", [NSString stringWithFormat:@"[电池] 健康度:%.2f%%,循环次数:%@",
+            currentCapacity.doubleValue / designCapacity.doubleValue * 100.0,
+            cycleCount ?: @"—"]]];
+    }
+
+    // Two different questions, so both get answered. 剩余 is statfs' f_bavail, the same free blocks
+    // df reports. 可用 is what iOS reckons it could hand out after purging caches, offloadable apps
+    // and evictable iCloud files, which runs tens of GB higher.
+    struct statfs storage;
+    if (statfs([NSHomeDirectory() fileSystemRepresentation], &storage) == 0) {
+        double totalStorage = (double)((unsigned long long)storage.f_blocks * storage.f_bsize);
+        double freeStorage = (double)((unsigned long long)storage.f_bavail * storage.f_bsize);
+
+        NSNumber *purgeableAware = [[NSURL fileURLWithPath:NSHomeDirectory()]
+            resourceValuesForKeys:@[NSURLVolumeAvailableCapacityForImportantUsageKey] error:NULL][NSURLVolumeAvailableCapacityForImportantUsageKey];
+        double availableStorage = purgeableAware ? purgeableAware.doubleValue : freeStorage;
+
+        [entries addObject:@[@"internaldrive", [NSString stringWithFormat:@"[存储] 总:%.1fG,剩余:%.1fG,可用:%.1fG",
+            totalStorage / kBytesPerGigabyte,
+            freeStorage / kBytesPerGigabyte,
+            availableStorage / kBytesPerGigabyte]]];
+    }
+
+    double totalMemory = (double)[NSProcessInfo processInfo].physicalMemory;
+    vm_statistics64_data_t vmStats;
+    mach_msg_type_number_t vmCount = HOST_VM_INFO64_COUNT;
+    if (totalMemory > 0.0 && host_statistics64(mach_host_self(), HOST_VM_INFO64, (host_info64_t)&vmStats, &vmCount) == KERN_SUCCESS) {
+        // Free pages alone sit near zero on iOS by design, which would peg usage at ~97% forever.
+        // Count the pages the kernel can reclaim on demand as available too. free_count already
+        // includes speculative pages, so they are not added again.
+        double availableMemory = (double)(((uint64_t)vmStats.free_count
+            + vmStats.inactive_count
+            + vmStats.purgeable_count) * vm_kernel_page_size);
+        if (availableMemory > totalMemory) {
+            availableMemory = totalMemory;
+        }
+        [entries addObject:@[@"memorychip", [NSString stringWithFormat:@"[运存] 总:%.1fG,可用:%.1fG,使用率:%.0f%%",
+            totalMemory / kBytesPerGigabyte,
+            availableMemory / kBytesPerGigabyte,
+            (1.0 - availableMemory / totalMemory) * 100.0]]];
+    }
+
+    NSString *uptime = CCPMUptimeText();
+    if (uptime) {
+        [entries addObject:@[@"clock", [NSString stringWithFormat:@"[运行时间] %@", uptime]]];
+    }
+
+#if CCPM_DEBUG_HEADER
+    // Temporary: the header geometry the last height query saw, so the first expansion after a
+    // respring can be compared against every later one without attaching to SpringBoard.
+    [entries addObject:@[@"ladybug", [NSString stringWithFormat:@"[调试] label=%@ f=%.0f sep=%.0f est=%.0f rep=%.0f",
+        self.statusLabel ? @"Y" : @"N",
+        self.statusLabel ? self.statusLabel.font.pointSize : 0.0,
+        self.lastSeparatorY,
+        self.lastEstimatedHeaderHeight,
+        self.lastReportedHeight]]];
+#endif
+
+    return entries;
+}
+// Plain text form, used both as the module's subtitle and to measure the header.
+- (NSString *)deviceStatusText {
+    NSMutableArray *lines = [NSMutableArray array];
+    for (NSArray *entry in [self deviceStatusEntries]) {
+        [lines addObject:entry[1]];
+    }
+    return [lines componentsJoinedByString:@"\n"];
+}
+- (UIFont *)deviceStatusFont {
+    return [UIFont systemFontOfSize:kHeaderTextFontSize];
+}
+- (NSParagraphStyle *)deviceStatusParagraphStyle {
+    NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
+    style.alignment = NSTextAlignmentLeft;
+    style.firstLineHeadIndent = kHeaderTextIndent;
+    style.headIndent = kHeaderTextIndent;
+    style.lineSpacing = 0.0;
+    style.paragraphSpacing = 0.0;
+    return style;
+}
+- (NSAttributedString *)attributedDeviceStatusText {
+    UIFont *font = [self deviceStatusFont];
+    // White is asked for, but do not expect it to show: this label sits in a secondary-style
+    // vibrancy view, which re-maps whatever is drawn to its own brightness. Measured on device —
+    // white, grey and semibold all render the same dimness, while the row titles are bright because
+    // they live in a label-style vibrancy view. Kept so the colour is right if it ever moves.
+    NSDictionary *attributes = @{
+        NSFontAttributeName: font,
+        NSForegroundColorAttributeName: [UIColor whiteColor],
+        NSParagraphStyleAttributeName: [self deviceStatusParagraphStyle],
+    };
+
+    NSMutableAttributedString *result = [[NSMutableAttributedString alloc] init];
+    for (NSArray *entry in [self deviceStatusEntries]) {
+        if (result.length > 0) {
+            [result appendAttributedString:[[NSAttributedString alloc] initWithString:@"\n" attributes:attributes]];
+        }
+
+        UIImage *symbol = [UIImage systemImageNamed:entry[0]];
+        if (symbol) {
+            NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
+            attachment.image = [symbol imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+            CGFloat side = font.pointSize;
+            CGFloat aspect = symbol.size.height > 0.0 ? symbol.size.width / symbol.size.height : 1.0;
+            attachment.bounds = CGRectMake(0.0, font.descender, side * aspect, side);
+            [result appendAttributedString:[NSAttributedString attributedStringWithAttachment:attachment]];
+            [result appendAttributedString:[[NSAttributedString alloc] initWithString:@" " attributes:attributes]];
+        }
+        [result appendAttributedString:[[NSAttributedString alloc] initWithString:entry[1] attributes:attributes]];
+    }
+
+    // Covers the attachments too, so the symbols match the text wherever it is drawn.
+    [result addAttributes:@{
+        NSForegroundColorAttributeName: [UIColor whiteColor],
+        NSParagraphStyleAttributeName: [self deviceStatusParagraphStyle],
+    } range:NSMakeRange(0, result.length)];
+    return result;
+}
+// The header label is one centred line by default. Find it once by the text we just handed over —
+// after this it carries an attributed string, so matching by text would no longer work.
+- (UILabel *)findSubtitleLabelInView:(UIView *)view matchingText:(NSString *)text {
+    for (UIView *subview in view.subviews) {
+        if ([subview isKindOfClass:[UILabel class]] && [[(UILabel *)subview text] isEqualToString:text]) {
+            return (UILabel *)subview;
+        }
+        UILabel *found = [self findSubtitleLabelInView:subview matchingText:text];
+        if (found) {
+            return found;
+        }
+    }
+    return nil;
+}
+- (void)applyStatusLabelStyling {
+    UILabel *label = self.statusLabel;
+    if (!label) {
+        return;
+    }
+    label.numberOfLines = 0;
+    label.textAlignment = NSTextAlignmentLeft;
+    label.font = [self deviceStatusFont];
+    // No adjustsFontSizeToFitWidth: on a multi-line label it lays out at full size and then scales
+    // down, which is visible as the text jumping from large to small every time the menu opens.
+    // The status block is written to fit at this size instead.
+    label.adjustsFontSizeToFitWidth = NO;
+    label.textColor = [UIColor whiteColor];
+    label.attributedText = [self attributedDeviceStatusText];
+}
+// The module puts the plain subtitle back at its own font during layout, and the swap is visible
+// as the text jumping from large to small. Put ours back as soon as that happens.
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    UILabel *label = self.statusLabel;
+    if (label && fabs(label.font.pointSize - kHeaderTextFontSize) > 0.5) {
+        [self applyStatusLabelStyling];
+    }
+}
+- (void)updateDeviceStatusHeader {
+    NSString *status = [self deviceStatusText];
+    if (!status.length) {
+        return;
+    }
+    self.subtitle = status;
+
+    if (!self.statusLabel) {
+        self.statusLabel = [self findSubtitleLabelInView:self.view matchingText:status];
+    }
+    if (!self.statusLabel) {
+        return;
+    }
+    [self applyStatusLabelStyling];
+
+    // Lay the header out now rather than leaving it to the expansion. Until this runs the header
+    // still measures as the single-line subtitle it started as, and the first expansion sizes the
+    // panel from those stale metrics — too short for the rows, with a gap above them. Every later
+    // expansion looked right only because by then the header had been laid out once.
+    [self layoutHeaderIfNeeded];
+}
+- (void)layoutHeaderIfNeeded {
+    UIView *separator = nil;
+    @try {
+        separator = [self valueForKey:@"_headerSeparatorView"];
+    } @catch (__unused NSException *exception) {
+    }
+
+    UIView *host = separator.superview ?: self.view;
+    [self.statusLabel setNeedsLayout];
+    [host setNeedsLayout];
+    [host layoutIfNeeded];
+}
+// The panel is measured as part of this transition, so refresh the header before it is.
+- (void)willTransitionToExpandedContentMode:(BOOL)expanded {
+    if (expanded) {
+        [self updateDeviceStatusHeader];
+    }
+    [super willTransitionToExpandedContentMode:expanded];
+}
+// Expanding re-runs the header layout, which puts the plain subtitle back; restore the symbols.
+- (void)didTransitionToExpandedContentMode:(BOOL)expanded {
+    [super didTransitionToExpandedContentMode:expanded];
+    if (expanded) {
+        [self updateDeviceStatusHeader];
+        [self rememberLaidOutHeaderHeight];
+    }
+}
+// Now that the module has expanded once, its header is where it really goes. Keep that number so
+// the next first-expansion sizes the panel from a fact rather than an estimate.
+- (void)rememberLaidOutHeaderHeight {
+    UIView *separator = nil;
+    @try {
+        separator = [self valueForKey:@"_headerSeparatorView"];
+    } @catch (__unused NSException *exception) {
+    }
+    if (![separator isKindOfClass:[UIView class]]) {
+        return;
+    }
+
+    CGFloat laidOut = CGRectGetMinY(separator.frame);
+    if (laidOut <= 0.0) {
+        return;
+    }
+    CGFloat stored = [[preferences objectForKey:@"headerHeight" inDomain:domain] doubleValue];
+    if (fabs(stored - laidOut) > 1.0) {
+        [preferences setObject:@(laidOut) forKey:@"headerHeight" inDomain:domain];
+    }
+}
 - (instancetype)initWithNibName:(NSString *)name bundle:(NSBundle *)bundle {
     self = [super initWithNibName:name bundle:bundle];
     if (self) {
         self.title = @"电源选项";
-        self.subtitle = @"Scroll down for more options";
+        self.subtitle = [self deviceStatusText];
 
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(reloadItems) name:@"ccpowermenu/ReloadItems" object:nil];
     }
@@ -16,6 +310,7 @@
     [self loadItems];
 }
 - (void)loadItems {
+    [self updateDeviceStatusHeader];
     [self removeAllActions];
     // Settings only persists itemOrder once a row is dragged, so fall back to the same default
     // order the settings list starts from — otherwise the menu comes up empty.
@@ -32,21 +327,69 @@ static const NSTimeInterval kLongPressDuration = 0.5;
 // Only used if the private height APIs ever disappear.
 static const CGFloat kEstimatedMenuItemHeight = 60.0;
 static const CGFloat kFallbackHeaderHeight = 89.0;
+// Title row above the status block, plus the padding used when measuring that block. Kept tight:
+// the header had far more slack around the status lines than they needed.
+static const CGFloat kTitleAreaHeight = 44.0;
+static const CGFloat kHeaderTextInset = 8.0;
+static const CGFloat kHeaderTextFontSize = 13.0;
+// One character of breathing room on the left, since the block is left aligned.
+static const CGFloat kHeaderTextIndent = 8.0;
 // However tall the menu wants to be, never let it swallow the whole screen.
 static const CGFloat kMaximumExpandedHeightRatio = 0.9;
 
 // The header is the title/subtitle block above the first row. Its height is wherever the header
 // separator sits; that view is laid out before the module is ever expanded.
 - (CGFloat)menuHeaderHeight {
+    CGFloat height = kFallbackHeaderHeight;
     UIView *separator = nil;
     @try {
         separator = [self valueForKey:@"_headerSeparatorView"];
     } @catch (__unused NSException *exception) {
     }
     if ([separator isKindOfClass:[UIView class]] && CGRectGetMinY(separator.frame) > 0.0) {
-        return CGRectGetMinY(separator.frame);
+        height = CGRectGetMinY(separator.frame);
     }
-    return kFallbackHeaderHeight;
+    self.lastSeparatorY = height;
+
+    // The module's header is effectively a fixed height — it does not shrink to fit fewer lines —
+    // and on the first expansion after a respring the separator has not been placed there yet, so
+    // reading its frame under-reports and the last row gets cut off. A header height learned from
+    // a previous expansion is the reliable floor; it is remembered per device in the same domain
+    // as the rest of the settings.
+    CGFloat learned = [[preferences objectForKey:@"headerHeight" inDomain:domain] doubleValue];
+    height = MAX(height, learned);
+
+    // If the class exposes its own header height, that beats both.
+    for (NSString *name in @[@"_headerHeight", @"headerHeight", @"_headerViewHeight"]) {
+        SEL selector = NSSelectorFromString(name);
+        if ([self respondsToSelector:selector]) {
+            CGFloat reported = ((CGFloat (*)(id, SEL))objc_msgSend)(self, selector);
+            if (reported > 0.0) {
+                height = MAX(height, reported);
+                break;
+            }
+        }
+    }
+
+    // The status block is several lines tall, so the header needs more room than the one-line
+    // subtitle it replaced. Measure it rather than guessing at a line count.
+    NSString *subtitle = self.subtitle;
+    if (subtitle.length) {
+        CGFloat width = _preferredExpandedContentWidth > 0.0 ? _preferredExpandedContentWidth : WIDTH * 0.8;
+        UIFont *labelFont = self.statusLabel.font;
+        CGFloat measuringSize = MAX(kHeaderTextFontSize, labelFont ? labelFont.pointSize : 0.0);
+        CGRect bounds = [subtitle boundingRectWithSize:CGSizeMake(width - kHeaderTextIndent * 2.0, CGFLOAT_MAX)
+                                               options:NSStringDrawingUsesLineFragmentOrigin
+                                            attributes:@{
+                                                NSFontAttributeName: [UIFont systemFontOfSize:measuringSize],
+                                                NSParagraphStyleAttributeName: [self deviceStatusParagraphStyle],
+                                            }
+                                               context:nil];
+        CGFloat estimated = kTitleAreaHeight + ceil(CGRectGetHeight(bounds)) + kHeaderTextInset;
+        self.lastEstimatedHeaderHeight = estimated;
+        height = MAX(height, estimated);
+    }
+    return height;
 }
 
 // The stock module sizes its expanded panel to a fixed fraction of the screen, which left a big
@@ -69,8 +412,10 @@ static const CGFloat kMaximumExpandedHeightRatio = 0.9;
         itemsHeight = rowHeight * (CGFloat)MAX((NSUInteger)1, [self menuItemViews].count);
     }
 
-    CGFloat height = [self menuHeaderHeight] + itemsHeight + [self _footerHeight];
-    return MIN(height, HEIGHT * kMaximumExpandedHeightRatio);
+    CGFloat height = MIN([self menuHeaderHeight] + itemsHeight + [self _footerHeight],
+        HEIGHT * kMaximumExpandedHeightRatio);
+    self.lastReportedHeight = height;
+    return height;
 }
 
 // self.expanded is not usable here: the superclass only sets it from its own _handlePressGesture:,

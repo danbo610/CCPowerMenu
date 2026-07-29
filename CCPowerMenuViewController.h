@@ -5,6 +5,9 @@
 #import "spawn.h"
 #include <rootless.h>
 #include <sys/sysctl.h>
+#include <sys/param.h>
+#include <sys/mount.h>
+#include <mach/mach.h>
 
 #define WIDTH [UIScreen mainScreen].bounds.size.width
 #define HEIGHT [UIScreen mainScreen].bounds.size.height
@@ -54,6 +57,8 @@ typedef struct CCUILayoutSize {
 - (void)removeAllActions;
 - (void)_handlePressGesture:(id)arg0;
 - (void)_handleActionTapped:(id)arg0;
+- (void)didTransitionToExpandedContentMode:(BOOL)arg0;
+- (void)willTransitionToExpandedContentMode:(BOOL)arg0;
 - (NSArray *)visibleMenuItems;
 // Every call to these is guarded by respondsToSelector: — they are private and may move.
 - (CGFloat)_menuItemsHeightForWidth:(CGFloat)arg0;
@@ -103,10 +108,16 @@ typedef struct CCUILayoutSize {
 @property (nonatomic, assign) BOOL allowExpansion;
 @property (nonatomic, weak) CCUIMenuModuleItemView *highlightedMenuItemView;
 @property (nonatomic, assign) BOOL actionTappedDuringGesture;
+@property (nonatomic, weak) UILabel *statusLabel;
+// Recorded during the height query so the header geometry can be shown in a debug build.
+@property (nonatomic, assign) CGFloat lastSeparatorY;
+@property (nonatomic, assign) CGFloat lastEstimatedHeaderHeight;
+@property (nonatomic, assign) CGFloat lastReportedHeight;
 - (void)confirmActionWithTitle:(NSString *)title message:(NSString *)message confirmTitle:(NSString *)confirmTitle handler:(void (^)(void))handler;
 - (void)respringWithConfirmation;
 - (void)respringNow;
 - (BOOL)isMenuExpanded;
+- (NSString *)deviceStatusText;
 @end
 
 @interface FBSystemService : NSObject
