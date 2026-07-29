@@ -53,6 +53,11 @@ typedef struct CCUILayoutSize {
 - (void)setMenuItems:(id)arg0;
 - (void)removeAllActions;
 - (void)_handlePressGesture:(id)arg0;
+- (void)_handleActionTapped:(id)arg0;
+- (NSArray *)visibleMenuItems;
+// Every call to these is guarded by respondsToSelector: — they are private and may move.
+- (CGFloat)_menuItemsHeightForWidth:(CGFloat)arg0;
+- (CGFloat)_defaultMenuItemHeight;
 @end
 
 // The module's own container — the object that opens the expanded menu, and the one that
@@ -60,6 +65,7 @@ typedef struct CCUILayoutSize {
 @interface CCUIContentModuleContainerViewController : UIViewController
 - (void)expandModule;
 - (BOOL)isExpanded;
+- (void)dismissExpandedModuleAnimated:(BOOL)arg0;
 @end
 
 @interface CCUIMenuModuleItem : NSObject
@@ -68,6 +74,12 @@ typedef struct CCUILayoutSize {
 @property (copy, nonatomic) NSString *title;
 - (id)initWithTitle:(id)arg0 identifier:(id)arg1 handler:(id)arg2;
 - (BOOL)performAction;
+@end
+
+// One row of the expanded menu. It is a UIControl, so `highlighted` is the real UIKit property;
+// `menuItem` is private and every call site checks respondsToSelector: first.
+@interface CCUIMenuModuleItemView : UIControl
+- (CCUIMenuModuleItem *)menuItem;
 @end
 
 @protocol CCUIContentModuleContentViewController <NSObject>
@@ -89,6 +101,8 @@ typedef struct CCUILayoutSize {
 @property (nonatomic, assign) BOOL longPressFired;
 @property (nonatomic, assign) BOOL pressInProgress;
 @property (nonatomic, assign) BOOL allowExpansion;
+@property (nonatomic, weak) CCUIMenuModuleItemView *highlightedMenuItemView;
+@property (nonatomic, assign) BOOL actionTappedDuringGesture;
 - (void)confirmActionWithTitle:(NSString *)title message:(NSString *)message confirmTitle:(NSString *)confirmTitle handler:(void (^)(void))handler;
 - (void)respringWithConfirmation;
 - (void)respringNow;

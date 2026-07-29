@@ -29,6 +29,49 @@
 }
 // How long a press has to be held before it counts as a long press rather than a tap.
 static const NSTimeInterval kLongPressDuration = 0.5;
+// Only used if the private height APIs ever disappear.
+static const CGFloat kEstimatedMenuItemHeight = 60.0;
+static const CGFloat kFallbackHeaderHeight = 89.0;
+// However tall the menu wants to be, never let it swallow the whole screen.
+static const CGFloat kMaximumExpandedHeightRatio = 0.9;
+
+// The header is the title/subtitle block above the first row. Its height is wherever the header
+// separator sits; that view is laid out before the module is ever expanded.
+- (CGFloat)menuHeaderHeight {
+    UIView *separator = nil;
+    @try {
+        separator = [self valueForKey:@"_headerSeparatorView"];
+    } @catch (__unused NSException *exception) {
+    }
+    if ([separator isKindOfClass:[UIView class]] && CGRectGetMinY(separator.frame) > 0.0) {
+        return CGRectGetMinY(separator.frame);
+    }
+    return kFallbackHeaderHeight;
+}
+
+// The stock module sizes its expanded panel to a fixed fraction of the screen, which left a big
+// empty area below five rows. Measure the rows instead and ask for exactly that much.
+- (CGFloat)preferredExpandedContentHeight {
+    CGFloat width = _preferredExpandedContentWidth > 0.0 ? _preferredExpandedContentWidth : WIDTH * 0.8;
+
+    CGFloat itemsHeight = 0.0;
+    if ([self respondsToSelector:@selector(_menuItemsHeightForWidth:)]) {
+        itemsHeight = [self _menuItemsHeightForWidth:width];
+    }
+    if (itemsHeight <= 0.0) {
+        CGFloat rowHeight = kEstimatedMenuItemHeight;
+        if ([self respondsToSelector:@selector(_defaultMenuItemHeight)]) {
+            CGFloat reported = [self _defaultMenuItemHeight];
+            if (reported > 0.0) {
+                rowHeight = reported;
+            }
+        }
+        itemsHeight = rowHeight * (CGFloat)MAX((NSUInteger)1, [self menuItemViews].count);
+    }
+
+    CGFloat height = [self menuHeaderHeight] + itemsHeight + [self _footerHeight];
+    return MIN(height, HEIGHT * kMaximumExpandedHeightRatio);
+}
 
 // self.expanded is not usable here: the superclass only sets it from its own _handlePressGesture:,
 // which we bypass, so it stays false even with the menu wide open. Ask the container, which
@@ -50,9 +93,130 @@ static const NSTimeInterval kLongPressDuration = 0.5;
 // Take the gesture over completely to swap that around — tap opens the menu, long press resprings
 // straight away. Deliberately does not call super for the collapsed case; super is what would
 // expand on long press, which is exactly what we are replacing.
+// ---- expanded menu: make the selection follow the finger ----
+
+// Root view the whole platter lives in, so every menu row can be measured in one coordinate space.
+- (UIView *)menuRootView {
+    UIView *containerView = self.parentViewController.view;
+    return containerView ?: self.view;
+}
+- (void)collectMenuItemViewsFrom:(UIView *)view into:(NSMutableArray *)found {
+    Class itemViewClass = %c(CCUIMenuModuleItemView);
+    for (UIView *subview in view.subviews) {
+        if (itemViewClass && [subview isKindOfClass:itemViewClass]) {
+            [found addObject:subview];
+        }
+        [self collectMenuItemViewsFrom:subview into:found];
+    }
+}
+- (NSArray *)menuItemViews {
+    NSMutableArray *found = [NSMutableArray array];
+    UIView *root = [self menuRootView];
+    [self collectMenuItemViewsFrom:root into:found];
+    [found sortUsingComparator:^NSComparisonResult(UIView *first, UIView *second) {
+        CGFloat firstY = [first convertPoint:CGPointZero toView:root].y;
+        CGFloat secondY = [second convertPoint:CGPointZero toView:root].y;
+        if (firstY < secondY) {
+            return NSOrderedAscending;
+        }
+        return firstY > secondY ? NSOrderedDescending : NSOrderedSame;
+    }];
+    return found;
+}
+- (CCUIMenuModuleItemView *)menuItemViewAtLocation:(CGPoint)location {
+    UIView *root = [self menuRootView];
+    for (CCUIMenuModuleItemView *itemView in [self menuItemViews]) {
+        if (CGRectContainsPoint([itemView convertRect:itemView.bounds toView:root], location)) {
+            return itemView;
+        }
+    }
+    return nil;
+}
+- (void)highlightMenuItemViewAtLocation:(CGPoint)location {
+    CCUIMenuModuleItemView *hit = [self menuItemViewAtLocation:location];
+    for (CCUIMenuModuleItemView *itemView in [self menuItemViews]) {
+        itemView.highlighted = NO;
+    }
+    hit.highlighted = YES;
+    self.highlightedMenuItemView = hit;
+}
+- (void)clearMenuItemHighlights {
+    for (CCUIMenuModuleItemView *itemView in [self menuItemViews]) {
+        itemView.highlighted = NO;
+    }
+    self.highlightedMenuItemView = nil;
+}
+- (void)performActionForMenuItemView:(CCUIMenuModuleItemView *)itemView {
+    if (!itemView) {
+        return;
+    }
+
+    CCUIMenuModuleItem *item = nil;
+    if ([itemView respondsToSelector:@selector(menuItem)]) {
+        item = [itemView menuItem];
+    }
+    if (!item && [self respondsToSelector:@selector(visibleMenuItems)]) {
+        // Fall back to position: the rows are laid out in the same order as the items.
+        NSUInteger index = [[self menuItemViews] indexOfObject:itemView];
+        NSArray *items = [self visibleMenuItems];
+        if (index != NSNotFound && index < items.count) {
+            item = items[index];
+        }
+    }
+    if (![item respondsToSelector:@selector(performAction)]) {
+        return;
+    }
+
+    UIViewController *container = self.parentViewController;
+    if ([container respondsToSelector:@selector(dismissExpandedModuleAnimated:)]) {
+        [(CCUIContentModuleContainerViewController *)container dismissExpandedModuleAnimated:YES];
+    }
+    [item performAction];
+}
+// A row is a UIControl, so a quick tap fires its own action and runs the item without us. Record
+// that so the gesture's own fallback does not run it a second time.
+- (void)_handleActionTapped:(id)sender {
+    self.actionTappedDuringGesture = YES;
+    [super _handleActionTapped:sender];
+}
+- (void)handleExpandedMenuGesture:(UILongPressGestureRecognizer *)gesture {
+    CGPoint location = [gesture locationInView:[self menuRootView]];
+    switch (gesture.state) {
+        case UIGestureRecognizerStateBegan:
+            self.actionTappedDuringGesture = NO;
+            [self highlightMenuItemViewAtLocation:location];
+            break;
+        case UIGestureRecognizerStateChanged:
+            [self highlightMenuItemViewAtLocation:location];
+            break;
+        case UIGestureRecognizerStateEnded: {
+            CCUIMenuModuleItemView *hit = self.highlightedMenuItemView;
+            [self clearMenuItemHighlights];
+            __weak typeof(self) weakSelf = self;
+            // Deferred by one turn of the run loop: the row's own control action lands right after
+            // the gesture ends, and it should win when it happens at all. Holding the press
+            // cancels that action, which is the case this covers.
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!weakSelf.actionTappedDuringGesture) {
+                    [weakSelf performActionForMenuItemView:hit];
+                }
+            });
+            break;
+        }
+        case UIGestureRecognizerStateCancelled:
+        case UIGestureRecognizerStateFailed:
+            [self clearMenuItemHighlights];
+            break;
+        default:
+            break;
+    }
+}
 - (void)_handlePressGesture:(UILongPressGestureRecognizer *)gesture {
     if ([self isMenuExpanded]) {
-        [super _handlePressGesture:gesture];
+        // Not forwarded to super: super's drag-select expects the gesture to have started on the
+        // collapsed icon and expanded mid-press. Ours starts with the menu already open, which
+        // left rows stuck highlighted and never ran anything.
+        [self handleExpandedMenuGesture:gesture];
         return;
     }
 
@@ -224,7 +388,6 @@ static const NSTimeInterval kLongPressDuration = 0.5;
     ]];
 
     _preferredExpandedContentWidth = WIDTH * 0.8;
-    _preferredExpandedContentHeight = HEIGHT * 0.8;
 
     // viewWillTransitionToSize: never fires for a CC module on iOS 16, so it can't be the only
     // thing that populates the menu.
