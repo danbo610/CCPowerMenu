@@ -1,6 +1,6 @@
 # CCPowerMenu roothide / iOS 16 适配与修复工作总结
 
-对上游 [MTACS/CCPowerMenu](https://github.com/MTACS/CCPowerMenu) 1.0.1 在 **roothide 越狱 + iOS 16.3.1** 上的移植、除错与功能改造记录。分支 `fix/roothide-ios16`,7 个 commit,版本 1.0.1 → 1.0.6。
+对上游 [MTACS/CCPowerMenu](https://github.com/MTACS/CCPowerMenu) 1.0.1 在 **roothide 越狱 + iOS 16.3.1** 上的移植、除错与功能改造记录。分支 `fix/roothide-ios16`,版本 1.0.1 → 1.0.10,仓库为 [danbo610/CCPowerMenu](https://github.com/danbo610/CCPowerMenu)(上游保留为 `upstream` remote)。
 
 目标设备:iPhone 12 Pro(iPhone13,3),iOS 16.3.1(20D67),roothide(Dopamine 系)+ ellekit + CCSupport。
 
@@ -18,6 +18,10 @@
 | 4 | Reboot Userspace 在 roothide 上静默失效 | 越狱适配 | 已修,提权已验证 |
 | 5 | 无误点保护 | 功能缺失 | 已加,已验证 |
 | 6 | 长按才出菜单,不符合使用习惯 | 交互改造 | 已改,已验证 |
+| 7 | 菜单展开后拖动不跟手、松手不执行且高亮卡住 | 交互缺陷 | 已修,已验证 |
+| 8 | 面板高度写死屏高 80%,大片空白 | 布局缺陷 | 已修,已验证 |
+| 9 | 头部只有一句无用副标题 | 功能增强 | 已加设备状态栏 |
+| 10 | 菜单全英文 | 本地化 | 已中文化 |
 
 ---
 
@@ -364,39 +368,130 @@ container gestures = 6
 
 ---
 
-## 9. 调试方法论小结
+## 9. 设备状态栏与数据口径
 
-这次排障中被证明有效(或用代价换来)的做法:
+把头部那句无用的 "Scroll down for more options" 换成实时设备状态,每次模块出现时刷新:
 
-1. **只读优先。** Frida 探针默认只枚举、不调用。这条是用一次崩溃换来的教训:**永远不要对宿主进程的共享单例调用 `init` 系方法**,连探针也不行。
-2. **对照实验放到无关进程里做。** 验证「`initWithSuiteName:` 会不会毁掉宿主 defaults」时选了 Sileo 而不是 SpringBoard,拿到了干净的 81 → 34 数据且零风险。
-3. **静态证据看未 strip 的 `.o`。** 发布二进制被 strip 后 `otool -tV` 没有符号标签,`.theos/obj/*/…​.o` 里方法名俱全。
-4. **entitlement 是判断「这个操作被允许吗」的硬证据。** `ldid -e` 对比 `sbreload` 和 `killall`,一眼看出 backboardd 为什么拉不回来。
-5. **trace 要带时间戳,并覆盖失败分支。** 第四轮如果没有把 `willTransitionToExpandedContentMode:` 也挂上,根本发现不了「菜单是被别人展开的」。
-6. **Fail closed。** 确认框拿不到 scene 就不执行动作;长按计时器触发前复查状态。危险操作的失败方向必须是「什么都不做」。
-7. **改造私有 API 行为时留退路。** 第四轮的闸门设计成「不被征询也只是退回原行为」,避免一次失败的猜测把已经修好的功能带崩。
-8. **每次构建换版本号。** 1.0.2 → 1.0.6 每轮递增,`dpkg -l` 一眼确认手机上跑的是哪一版。
-9. **保底通道常备。** 全程 SSH 在旁,`ssh iphone 'sbreload'` 是每次真机验证的救援手段(前提是 backboardd 还活着——这也是不再碰它的另一个理由)。
+```
+[电池] 健康度:112.90%,循环次数:334
+[存储] 总:255.9G,剩余:40.1G,可用:85.2G
+[运存] 总:6.0G,可用:2.9G,使用率:51%
+[运行时间] 0天4小时1分
+```
+
+| 项 | 来源 |
+|---|---|
+| 电池健康 / 循环次数 | IOKit `AppleSmartBattery`:`NominalChargeCapacity ÷ DesignCapacity`、`CycleCount` |
+| 运行时间 | `sysctl KERN_BOOTTIME` 与当前时间之差 |
+| 存储 | `statfs()` 的 `f_blocks` / `f_bavail`,外加 `NSURLVolumeAvailableCapacityForImportantUsageKey` |
+| 运存 | `NSProcessInfo.physicalMemory` + `host_statistics64` |
+
+每一项**独立降级**:取不到就少一行,不会整块空掉。IOKit 的四个函数是手写声明(不引头文件),`.xm` 按 Objective-C++ 编译,所以必须包 `extern "C"` —— 第一次构建就栽在符号修饰上。
+
+### 9.1 存储的两个口径差了 45GB
+
+一开始只显示一个"可用",用的是 `NSURLVolumeAvailableCapacityForImportantUsageKey`,报 85GB,而 CCPower 和 `df -h` 都是 37GB。差异有两层:
+
+1. **进制**:总容量的字节数与 df **完全一致**(255,881,465,856 B),只是我按 `/1e9` 印成 256,df 按 `/1024³` 印成 238 却仍标 "GB"。同一个数,两种进制。
+2. **语义**:那个键返回的是"系统认为**能腾出来**的空间",把可清除缓存、可卸载 App 内容、可从 iCloud 重新下载的文件都算了进去;df 用的是 `statfs` 的 `f_bavail`,即**裸的文件系统空闲块**。
+
+最终两个都显示:`剩余` = statfs(与 df 一致),`可用` = 含可回收。运存同理——只算 `free_count` 的话使用率会恒定在 97%(iOS 本就把空闲页压得极低),所以"可用"计入内核可回收页(`free + inactive + purgeable`,`free_count` 已含 speculative,未重复计)。
 
 ---
 
-## 10. 提交历史
+## 10. vibrancy 材质:颜色在这里是无效的
+
+控制中心整块套在 **vibrancy 效果**里,它把绘制内容压成**亮度蒙版**再由材质着色。三个现象都是同一个原因:
+
+1. **emoji 变成灰色方块**。🔋💾🧠⏱ 的颜色信息在渲染阶段被丢弃,只剩轮廓剪影。正确做法是用 **SF Symbols 模板图**(`NSTextAttachment` + `UIImageRenderingModeAlwaysTemplate`)——菜单行的图标本来就是这么画的,所以它们看起来干净。
+2. **把文字设成纯白毫无变化**。实测:白色、灰色、semibold 三种渲染出来一样暗。
+3. **行标题亮、行副标题暗**,而字号差别并不足以解释。因为它们分属不同风格的 vibrancy 层:标题在 **label(主要)**,副标题和头部状态栏在 **secondaryLabel(次要)**。
+
+结论:**在同一 vibrancy 层内无法提高亮度**。要和行标题一样亮,只能把标签换到 label 风格的效果视图里(副作用是同层其它元素一起变亮),这一步没做,维持现状。
+
+---
+
+## 11. 首次展开的布局错位
+
+现象很具体:**respring 后的第一次展开**头部空一截、最后一行被切;之后每次都正常。
+
+用一次**"把诊断值印进界面"**的构建拿到了确切数值(不注入 SpringBoard):
+
+```
+[调试] label=Y f=13 sep=165 est=130 rep=425
+```
+
+配合截图按面板宽度换算,真相是:
+
+- 父类的头部高度**基本是固定的 ≈158pt**,不会因为只放 4 行就收缩(所以 4 行时空一截);
+- 我上报的面板高度取 `MAX(查询时分隔线位置, 自己的估算)`;
+- 首次展开时分隔线**还没落位**,估算值(4 行 ≈121pt)小于父类实际用的 158pt → 少报约 37pt → 最后一行被挤出去;
+- 第二次起分隔线已停在 158,`MAX` 自然取对。
+
+中途还出现过"多加一行调试信息反而正常"的假象 —— 那不是调试功能修好了什么,**只是 5 行文本把估算垫到了 165pt,恰好越过父类的 158pt 阈值**。
+
+**修法**:展开完成后把分隔线的真实位置记进偏好设置(`headerHeight`),之后每次计算取 `MAX(当前分隔线, 内容估算, 学到的真实高度)`。这样 respring 后的首次展开用的是**上一次的事实**而非估算;按设备学习,不写死数字,以后增删菜单项自动跟随。另外若类本身暴露 `_headerHeight` 之类方法(`respondsToSelector:` 探测),优先用它。
+
+顺带修掉两个相关问题:
+- **字体"大变小"跳动**:`adjustsFontSizeToFitWidth` 在多行标签上会先按原字号排版再整体缩放,过程肉眼可见。关掉它,固定 13pt。
+- **父类会在布局时把标签换回自己的字号**:覆写 `viewDidLayoutSubviews`,发现字号不对就重贴富文本(styling 与强制布局拆开,避免递归)。
+
+---
+
+## 12. 一次由探针造成的事故(第二次)
+
+排查面板高度时,我在 Frida 脚本里**直接在 JS 线程上调用了 UIKit 布局方法**:
+
+```js
+inst._menuItemsHeightForWidth_(312)
+inst.preferredExpandedContentHeightWithWidth_(312)
+```
+
+UIKit 不是线程安全的,这些方法要取 CoreAnimation / UIView 的布局锁。日志正好停在这一句之前的最后一行输出。SpringBoard 被拖死后由看门狗杀掉,重启后**桌面图标全部不显示**,用户只能重启手机并重新越狱。此外 `ObjC.choose()` 扫堆时会**暂停进程所有线程**,在 SpringBoard 里本身就是重操作。
+
+第一次事故(§3)是对共享单例调 `init`,这一次是跨线程碰 UIKit —— 两次都是**探针本身破坏了宿主**。此后本项目的三个新需求(高度自适应、拖动跟手、状态栏)**全部在插件自己的代码里完成,零注入**:introspection 用 `respondsToSelector:` 写在插件里(天然跑在主线程),诊断值直接印进界面。
+
+---
+
+## 13. 调试方法论小结
+
+这次排障中被证明有效(或用代价换来)的做法:
+
+1. **只读优先。** Frida 探针默认只枚举、不调用。这条是用**两次**事故换来的:**永远不要对宿主进程的共享单例调用 `init` 系方法**(§3),**永远不要在非主线程调用 UIKit**(§12)——连探针也不行。必须调用时用 `ObjC.schedule(ObjC.mainQueue, ...)`,并且清楚 `ObjC.choose()` 会暂停进程所有线程。
+2. **能不注入就不注入。** 需要运行时信息时,优先把 `respondsToSelector:` 探测写进插件自己的代码——它天然跑在主线程、在正确的生命周期时机,比外部注入安全得多。
+3. **界面就是输出通道。** 拿不到日志、又不能注入时,把诊断值直接印进 UI(`CCPM_DEBUG_HEADER` 开关),截图回来就是精确数值。首次展开错位那个问题正是这么定位的——在此之前我按截图比例反推了两轮,全是猜。
+4. **对照实验放到无关进程里做。** 验证「`initWithSuiteName:` 会不会毁掉宿主 defaults」时选了 Sileo 而不是 SpringBoard,拿到了干净的 81 → 34 数据且零风险。
+5. **静态证据看未 strip 的 `.o`。** 发布二进制被 strip 后 `otool -tV` 没有符号标签,`.theos/obj/*/…​.o` 里方法名俱全。
+6. **entitlement 是判断「这个操作被允许吗」的硬证据。** `ldid -e` 对比 `sbreload` 和 `killall`,一眼看出 backboardd 为什么拉不回来。
+7. **trace 要带时间戳,并覆盖失败分支。** 第四轮如果没有把 `willTransitionToExpandedContentMode:` 也挂上,根本发现不了「菜单是被别人展开的」。
+8. **Fail closed。** 确认框拿不到 scene 就不执行动作;长按计时器触发前复查状态。危险操作的失败方向必须是「什么都不做」。
+9. **改造私有 API 行为时留退路。** 第四轮的闸门设计成「不被征询也只是退回原行为」,避免一次失败的猜测把已经修好的功能带崩。
+10. **每次构建换版本号。** 1.0.2 → 1.0.10 每轮递增,`dpkg -l` 一眼确认手机上跑的是哪一版。
+11. **保底通道常备。** 全程 SSH 在旁,`ssh iphone 'sbreload'` 是每次真机验证的救援手段(前提是 backboardd 还活着——这也是不再碰它的另一个理由)。
+
+---
+
+## 14. 提交历史
 
 分支 `fix/roothide-ios16`:
 
 ```
-ebf1043  Fix empty menu and stop hijacking the host's NSUserDefaults singleton
-123f2ee  Make Respring and Reboot Userspace work on a roothide jailbreak
-63ea0db  Confirm every action before it runs, and bump to 1.0.2
-02fe395  Open the menu on tap, respring on long press
-5208f17  Respring immediately on long press, without confirming
-3576d75  Ask the container whether the menu is open, not self.expanded
-20bfc5d  Take the long press back from Control Center's own expansion
+Fix empty menu and stop hijacking the host's NSUserDefaults singleton
+Make Respring and Reboot Userspace work on a roothide jailbreak
+Confirm every action before it runs, and bump to 1.0.2
+Open the menu on tap, respring on long press
+Respring immediately on long press, without confirming
+Ask the container whether the menu is open, not self.expanded
+Take the long press back from Control Center's own expansion
+Write up the roothide/iOS 16 port
+Size the panel to its rows and make selection follow the finger
+Translate the menu into Chinese
+Show live device status in the menu header
 ```
 
 ---
 
-## 11. 遗留与未验证项
+## 15. 遗留与未验证项
 
 诚实记录尚未在真机上跑过的路径:
 
@@ -407,3 +502,7 @@ ebf1043  Fix empty menu and stop hijacking the host's NSUserDefaults singleton
 - **锁屏状态下的确认框**未验证(`_canShowWhileLocked` 返回 YES)。
 - 长按阈值固定 0.5 秒(`kLongPressDuration`),未做成可配置项。
 - 设置页第 2 个 section 行数为 0(上游遗留),确认框开关等新选项若要做,可以放在那里。
+- **设置页的条目名称仍是英文**(Respring / Safe Mode …),只有控制中心里的菜单做了中文化。
+- **头部状态栏无法更亮**:它所在的 secondaryLabel 风格 vibrancy 层决定了亮度,颜色和字重都改变不了(§10)。要与行标题同亮度需换效果视图风格,副作用未评估。
+- **全新安装后的第一次展开仍可能偏矮**:`headerHeight` 要等第一次展开结束才学得到。此后(含每次 respring)都正确。
+- 状态栏每次显示都会读一次 IOKit / statfs / mach 统计,目前没有缓存;实测无感,但若以后加更多项值得测一下开销。
